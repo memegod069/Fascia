@@ -1,32 +1,16 @@
-# Fascia
+# Fascia — AI Creature Black Box for Blender
 
-Welcome to the **Fascia** project!
+**Goal**: A Blender addon that lets anyone create and customize believable creatures using simple prompts.
 
-This is a fresh folder connected to your GitHub repository at: https://github.com/memegod069/Fascia
+**How it should feel for the user**:
+- Open Blender
+- Type: “Make a young brown horse with soft belly fat”
+- Press Generate
+- Get a ready-to-use horse with decent anatomy and soft movement
+- Then easily tweak age, colour, fat, muscle, etc. with sliders or more prompts
 
-## Getting Started
+Fascia is the “black box” that makes the hard part (anatomy, soft tissue, rigging) happen automatically so the user can stay creative.
 
-You can start adding your project files (like code, designs, or notes) right here in this folder.
+This repo is being built slowly, one small piece at a time, mostly with AI assistance (vibe coding).
 
-### Quick Guide to Git Commands
-
-Here are three simple steps to save your work and share it on GitHub:
-
-1. **Check your progress:**
-   ```bash
-   git status
-   ```
-   *This shows you which files you have added or changed.*
-
-2. **Save your changes locally:**
-   ```bash
-   git add .
-   git commit -m "Write a short note about what you did"
-   ```
-   *This packages your changes and labels them with your note.*
-
-3. **Send your changes to GitHub:**
-   ```bash
-   git push origin main
-   ```
-   *This uploads your saved work online so it is safely backed up on GitHub.*
+Current status: still working on it.
