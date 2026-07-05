@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Fascia",
     "author": "Fascia contributors",
-    "version": (0, 0, 4),
+    "version": (0, 1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Fascia",
     "description": "Fascia creature soft-tissue toolbox — landmarks, muscles, skin binding, flex baking",
@@ -375,23 +375,23 @@ MAX_CONTRACTION = 0.25
 HORSE_MUSCLES = {
     # Front body (warm colours)
     "Trapezius":         {"from": "Withers",         "to": "ScapulaTop",      "radius": 0.017, "color": (0.80, 0.20, 0.15, 0.60)},
-    "Deltoid":           {"from": "ScapulaTop",      "to": "PointOfShoulder", "radius": 0.014, "color": (0.90, 0.35, 0.10, 0.60)},
+    "Deltoid":           {"from": "ScapulaTop",      "to": "PointOfShoulder", "radius": 0.014, "color": (0.90, 0.35, 0.10, 0.60), "antagonist": "Pectorals"},
     "Triceps":           {"from": "ScapulaTop",      "to": "Elbow",           "radius": 0.019, "color": (0.70, 0.12, 0.12, 0.60)},
-    "BicepsBrachii":     {"from": "PointOfShoulder", "to": "Elbow",           "radius": 0.014, "color": (0.85, 0.45, 0.35, 0.60)},
-    "Pectorals":         {"from": "Chest",           "to": "PointOfShoulder", "radius": 0.019, "color": (0.82, 0.30, 0.30, 0.60)},
+    "BicepsBrachii":     {"from": "PointOfShoulder", "to": "Elbow",           "radius": 0.014, "color": (0.85, 0.45, 0.35, 0.60), "antagonist": "Triceps"},
+    "Pectorals":         {"from": "Chest",           "to": "PointOfShoulder", "radius": 0.019, "color": (0.82, 0.30, 0.30, 0.60), "antagonist": "LatissimusDorsi"},
     "SerratusVentralis": {"from": "Chest",           "to": "SerratusAnchor",  "radius": 0.017, "color": (0.78, 0.35, 0.40, 0.60)},
     "LatissimusDorsi":   {"from": "MidBack",         "to": "LatAnchor",       "radius": 0.019, "color": (0.72, 0.22, 0.18, 0.60)},
-    "Brachiocephalicus": {"from": "Poll",            "to": "PointOfShoulder", "radius": 0.014, "color": (0.88, 0.50, 0.30, 0.60)},
+    "Brachiocephalicus": {"from": "Poll",            "to": "PointOfShoulder", "radius": 0.014, "color": (0.88, 0.50, 0.30, 0.60), "antagonist": "SerratusVentralis"},
 
     # Spine & torso
     "LongissimusDorsi":  {"from": "Withers",         "to": "PointOfCroup",    "radius": 0.017, "color": (0.65, 0.18, 0.18, 0.60)},
-    "RectusAbdominis":   {"from": "Chest",           "to": "PointOfHip",      "radius": 0.014, "color": (0.75, 0.55, 0.40, 0.60)},
+    "RectusAbdominis":   {"from": "Chest",           "to": "PointOfHip",      "radius": 0.014, "color": (0.75, 0.55, 0.40, 0.60), "antagonist": "LongissimusDorsi"},
 
     # Rear body (cool colours)
     "GluteusMedius":     {"from": "PointOfHip",      "to": "HipJoint",        "radius": 0.028, "color": (0.20, 0.22, 0.78, 0.60)},
     "BicepsFemoris":     {"from": "PointOfButtock",  "to": "Stifle",          "radius": 0.019, "color": (0.30, 0.30, 0.85, 0.60)},
-    "Semitendinosus":    {"from": "PointOfButtock",  "to": "Hock",            "radius": 0.017, "color": (0.40, 0.38, 0.75, 0.60)},
-    "Quadriceps":        {"from": "HipJoint",        "to": "Stifle",          "radius": 0.019, "color": (0.45, 0.25, 0.70, 0.60)},
+    "Semitendinosus":    {"from": "PointOfButtock",  "to": "Hock",            "radius": 0.017, "color": (0.40, 0.38, 0.75, 0.60), "antagonist": "Quadriceps"},
+    "Quadriceps":        {"from": "HipJoint",        "to": "Stifle",          "radius": 0.019, "color": (0.45, 0.25, 0.70, 0.60), "antagonist": "BicepsFemoris"},
     "Gastrocnemius":     {"from": "Stifle",          "to": "Hock",            "radius": 0.014, "color": (0.55, 0.42, 0.78, 0.60)},
 }
 
@@ -540,9 +540,39 @@ def update_flex(self, context):
     # length_scale_i and thickness_scale_i based on its recruitment.
     muscle_scales = {}  # name -> (length_scale_i, thickness_scale_i)
 
+    # Spec 10: Antagonist relaxation
+    # Build a map: muscle_name -> list of muscles that name it as antagonist
+    # (the "aggressors"). When an aggressor contracts, the named antagonist
+    # gets its contraction reduced proportionally.
+    antagonist_map = {}
+    for obj in muscles:
+        ant = obj.get("fascia_antagonist", "")
+        if ant:
+            ant_objs = [m for m in muscles if ant in m.name]
+            for ant_obj in ant_objs:
+                antagonist_map.setdefault(ant_obj.name, []).append(obj)
+
+    # Compute the relaxation fraction for each muscle that is named
+    # as an antagonist. The relaxation is the maximum contraction
+    # of all aggressors that name this muscle, normalised so that
+    # full antagonist contraction = full relaxation (c_B * 0.0).
+    # Saturated at 1.0 so relaxation never exceeds the muscle's
+    # own contraction.
+    max_c_total = flex * MAX_CONTRACTION if flex > 0.001 else 1.0
+    relaxation_map = {}
+    for m_name, aggressors in antagonist_map.items():
+        max_relax = 0.0
+        for ag in aggressors:
+            c_ag = flex * MAX_CONTRACTION * recruitment_map.get(ag.name, 1.0)
+            max_relax = max(max_relax, min(1.0, c_ag / max_c_total))
+        relaxation_map[m_name] = max_relax
+
     for obj in muscles:
         r_i = recruitment_map.get(obj.name, 1.0)
         c_i = flex * MAX_CONTRACTION * r_i
+        # Spec 10: apply antagonist relaxation
+        relax = relaxation_map.get(obj.name, 0.0)
+        c_i = c_i * (1.0 - relax)
         ls_i = 1.0 - c_i
         ts_i = 1.0 / (ls_i ** 0.5) if ls_i > 0.01 else 1.0
         obj.scale[0] = ts_i  # local X = thickness (bulge)
@@ -1183,6 +1213,13 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                     obj["fascia_radius"] = mdata["radius"] * base_size
                     obj["fascia_rest_length"] = (p2 - p1).length
 
+                    # Spec 10: Antagonist pairing — store the
+                    # antagonist muscle name so update_flex can
+                    # auto-relax this muscle when its antagonist
+                    # contracts.
+                    if "antagonist" in mdata:
+                        obj["fascia_antagonist"] = mdata["antagonist"]
+
                     # Spec 7: parent muscle to its origin landmark so it
                     # follows the landmark (which follows the rig bone).
                     # keep_transform=True preserves the just-set world transform.
@@ -1224,6 +1261,10 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                 obj["fascia_insertion"] = "Fascia_LM_" + to_key
                 obj["fascia_radius"] = mdata["radius"] * base_size
                 obj["fascia_rest_length"] = (p2 - p1).length
+
+                # Spec 10: Antagonist pairing.
+                if "antagonist" in mdata:
+                    obj["fascia_antagonist"] = mdata["antagonist"]
 
                 # Spec 7: parent muscle to its origin landmark.
                 _object_parent_object(obj, from_obj)
