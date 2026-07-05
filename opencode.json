@@ -1,0 +1,31 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md", "captain.md", "learnings.md"],
+  "permission": {
+    "task": "allow",
+    "bash": {
+      "git status": "allow",
+      "git status *": "allow",
+      "git log *": "allow",
+      "git diff *": "allow",
+      "git branch *": "allow",
+      "git checkout *": "allow",
+      "git add *": "allow",
+      "git stash *": "allow",
+      "git show *": "allow",
+      "git remote *": "allow",
+      "git rev-parse *": "allow",
+      "git commit *": "ask",
+      "git push no-mistakes *": "allow",
+      "git push *": "deny",
+      "treehouse *": "allow",
+      "gnhf *": "allow",
+      "gh-axi *": "allow",
+      "lavish-axi *": "allow",
+      "tmux *": "allow",
+      "exit": "allow",
+      "blender *": "allow",
+      "*": "ask"
+    }
+  }
+}

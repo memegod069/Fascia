@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Fascia",
     "author": "Fascia contributors",
-    "version": (0, 0, 3),
+    "version": (0, 0, 4),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Fascia",
     "description": "Fascia creature soft-tissue toolbox — landmarks, muscles, skin binding, flex baking",
@@ -117,6 +117,160 @@ def _load_species(filepath):
         return None, None, None
 
     return data["landmarks"], data["muscles"], data.get("name", "Unknown")
+
+
+def _load_species_json(json_str):
+    """Parse a species-definition JSON string and return
+    (landmarks_dict, muscles_dict, species_name).
+
+    Spec 9: the LLM-facing inline-anatomy path. Same schema and
+    same return contract as _load_species (Spec 6), but the
+    anatomy is passed as a string property (scene.fascia_species_json)
+    instead of read from a file. No file IO - the LLM sets the
+    property and calls place_landmarks / generate_muscles.
+
+    Returns (None, None, None) on error (invalid JSON or missing
+    required keys) - the caller falls back to embedded HORSE_* data.
+    """
+    try:
+        data = json.loads(json_str)
+    except Exception as e:
+        print("Fascia: error parsing species JSON string: " + str(e))
+        return None, None, None
+
+    if "landmarks" not in data or "muscles" not in data:
+        print("Fascia: species JSON string missing 'landmarks' or 'muscles' key")
+        return None, None, None
+
+    return data["landmarks"], data["muscles"], data.get("name", "Unknown")
+
+
+# ─────────────────────────────────────────────────────────────────
+# RIG-BINDING HELPERS (Spec 7)
+# ─────────────────────────────────────────────────────────────────
+# These helpers wire landmarks to armature bones and muscles to
+# landmarks, so the whole soft-tissue stack follows the skeleton.
+# The chain: bone → landmark (bone parent) → muscle (object parent)
+# → skin bulge (world-transform read via depsgraph).
+# ─────────────────────────────────────────────────────────────────
+
+def _find_nearest_bone(armature, world_point):
+    """Find the bone in armature whose segment (head→tail) is
+    closest to world_point. Returns (bone_name, distance) or
+    (None, inf) if the armature has no bones.
+
+    Used by the auto-bind operator (Spec 7) to pick a bone for
+    each landmark when the LLM has not set fascia_bone explicitly.
+    """
+    bones = armature.data.bones
+    if not bones:
+        return None, float('inf')
+
+    pt = mathutils.Vector(world_point)
+    best_name = None
+    best_dist = float('inf')
+    arm_mat = armature.matrix_world
+
+    for bone in bones:
+        head_w = arm_mat @ bone.head_local
+        tail_w = arm_mat @ bone.tail_local
+        seg = tail_w - head_w
+        seg_len_sq = seg.length_squared
+        if seg_len_sq < 1e-12:
+            d = (head_w - pt).length
+        else:
+            t = ((pt - head_w).dot(seg)) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            closest = head_w + seg * t
+            d = (closest - pt).length
+        if d < best_dist:
+            best_dist = d
+            best_name = bone.name
+
+    return best_name, best_dist
+
+
+def _bone_parent_object(empty, armature, bone_name):
+    """Bone-parent empty to bone_name on armature, preserving
+    the empty's current world position (keep_transform=True).
+
+    Sets armature.data.bones.active before calling parent_set
+    so the operator knows which bone to parent to, then restores
+    the original active bone.
+
+    Sets empty['fascia_bone'] = bone_name as metadata.
+    Returns True on success, False on failure.
+    """
+    if bone_name not in armature.data.bones:
+        return False
+
+    old_active = armature.data.bones.active
+    armature.data.bones.active = armature.data.bones[bone_name]
+
+    bpy.ops.object.select_all(action='DESELECT')
+    armature.select_set(True)
+    empty.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+
+    with bpy.context.temp_override(
+        active_object=armature,
+        selected_editable_objects=[armature, empty],
+        object=armature,
+    ):
+        bpy.ops.object.parent_set(type='BONE', keep_transform=True)
+
+    armature.data.bones.active = old_active
+    empty["fascia_bone"] = bone_name
+    return True
+
+
+def _object_parent_object(child, parent):
+    """Object-parent child to parent, preserving child's world
+    transform (keep_transform=True). Used to parent muscles to
+    their origin landmark (Spec 7)."""
+    bpy.ops.object.select_all(action='DESELECT')
+    parent.select_set(True)
+    child.select_set(True)
+    bpy.context.view_layer.objects.active = parent
+
+    with bpy.context.temp_override(
+        view_layer=bpy.context.view_layer,
+        active_object=parent,
+        selected_editable_objects=[parent, child],
+        object=parent,
+    ):
+        bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+
+
+def _add_insertion_track_constraint(muscle, insertion_obj):
+    """Add a Damped Track constraint on the muscle so its local +Z
+    (length axis, origin->insertion) points at the insertion landmark.
+
+    Spec 8: closes the 'wrong angle at insertion' gap from Spec 7 section 7.
+    Damped Track is rotation-only - it does not touch obj.scale, so
+    the volume-preserving contraction (obj.scale = (ts, ts, ls)) is
+    unaffected. Stretch To would override scale and break volume
+    preservation; rejected (Spec 8 section 2a).
+
+    The constraint is added at generation time and is always on.
+    At rest it is a no-op visually: the muscle already points at the
+    insertion (create_muscle_mesh Step 4), so the constraint's first
+    evaluation produces the same rotation. When the insertion landmark
+    moves (rig pose changes), the muscle reorients to follow.
+
+    KNOWN LIMITATION: The muscle's far end is at rest_length*ls along
+    the reoriented direction - it does NOT stretch to exactly reach the
+    insertion. If the insertion moved closer than rest_length*ls, the
+    far end overshoots; if farther, it undershoots. This is the
+    pre-existing Spec 4 insertion length-mismatch; Spec 8 fixes the
+    ANGLE, not the length. Anatomically honest for a geometric
+    contraction model (Fascia is not FEM, rule 13).
+    """
+    con = muscle.constraints.new(type='DAMPED_TRACK')
+    con.name = "Fascia_DampedTrack_Insertion"
+    con.target = insertion_obj
+    con.track_axis = 'TRACK_Z'
+    return con
 
 
 def _clear_skin_tags():
@@ -421,6 +575,12 @@ def update_flex(self, context):
     # Find the skin mesh objects (tagged by the user, or default placeholder)
     skin_objects = _get_skin_objects()
 
+    # Spec 7: muscles may now be parented to landmarks (which are
+    # bone-parented). matrix_world is computed from the parent chain
+    # and may be stale until the depsgraph evaluates. Force an update
+    # once before reading any parented muscle transforms.
+    context.view_layer.update()
+
     # Precompute muscle info so we don't recalculate it for every vertex.
     # For each muscle, we need its center (world position), its radius
     # (how thick it is), and its per-muscle thickness scale for the skin
@@ -440,11 +600,14 @@ def update_flex(self, context):
             # matrix_world.translation is the ORIGIN END, not the belly.
             # Compute the current (flexed) belly center from the origin + the
             # world-space local-Z axis + rest length + current length scale.
-            # rotation_quaternion is world rotation (muscles are unparented)
-            # and is unaffected by object scale, so the axis is always current
-            # without forcing a depsgraph update.
+            # matrix_world.to_quaternion() gives world rotation for both
+            # parented (Spec 7) and unparented (legacy) muscles.
+            # For unparented muscles it equals rotation_quaternion, so this
+            # is backward-compatible. The depsgraph update above ensures
+            # matrix_world is current for parented muscles.
             origin = m.matrix_world.translation.copy()
-            axis = (m.rotation_quaternion @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
+            world_rot = m.matrix_world.to_quaternion()
+            axis = (world_rot @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
             center = origin + axis * (rest_length * ls_i * 0.5)
         radius = m.get("fascia_radius", 0.04)
         muscle_info.append((center, radius, ts_i))
@@ -591,9 +754,12 @@ def create_muscle_mesh(name, point1, point2, radius=0.04):
     # and the far end sits on p2 (insertion). The Step 4 rotation orients
     # local +Z from p1 toward p2.
     # KNOWN LIMITATION: The insertion end shortens toward the origin during
-    # contraction, leaving a gap at the insertion landmark. Closing it needs
-    # skeleton-driven landmarks (future rig work). Per-muscle pin-end choice
-    # is also future work (per-muscle controls spec).
+    # contraction. Spec 8 adds a Damped Track constraint so the muscle
+    # reorients to POINT at the (possibly moved) insertion landmark, but the
+    # far end is still at rest_length*ls along that direction - it does not
+    # stretch to exactly reach the insertion. The geometric length mismatch
+    # (Spec 4 section 2) remains; only the ANGLE is now correct. Per-muscle
+    # pin-end choice is future work (per-muscle controls spec).
     obj.location = p1
 
     # Step 4: Rotate the muscle so its local Z axis (the long axis)
@@ -688,7 +854,7 @@ class FASCIA_OT_use_selected_as_base(bpy.types.Operator):
 class FASCIA_OT_place_landmarks(bpy.types.Operator):
     bl_idname = "fascia.place_landmarks"
     bl_label = "Place Landmarks"
-    bl_description = "Place anatomical landmark points on the horse"
+    bl_description = "Place anatomical landmark points on the base mesh using the active species (file, inline JSON, or built-in horse)"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -706,12 +872,19 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
         size_y = max_y - min_y
         size_z = max_z - min_z
 
-        # Use species file if configured; fall back to embedded horse data
+        # Spec 9: resolve anatomy in priority order - file (Spec 6),
+        # inline JSON string (Spec 9), then embedded horse data.
         landmarks_data = HORSE_LANDMARKS
         species_name = "Horse"
         species_path = context.scene.fascia_species_path
+        species_json = context.scene.fascia_species_json
         if species_path:
-            loaded_lm, _, loaded_name = _load_species(species_path)
+            loaded_lm, _loaded_ms, loaded_name = _load_species(species_path)
+            if loaded_lm:
+                landmarks_data = loaded_lm
+                species_name = loaded_name or "Unknown"
+        elif species_json:
+            loaded_lm, _loaded_ms, loaded_name = _load_species_json(species_json)
             if loaded_lm:
                 landmarks_data = loaded_lm
                 species_name = loaded_name or "Unknown"
@@ -748,6 +921,8 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
                     empty["fascia_region"] = region
                     empty["fascia_landmark"] = name
                     empty["fascia_side"] = suffix.strip("_")
+                    if "bone" in data:
+                        empty["fascia_bone"] = data["bone"]
                     bpy.context.collection.objects.link(empty)
 
                     # Parent to horse body so everything moves together
@@ -772,6 +947,8 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
                 empty["fascia_region"] = region
                 empty["fascia_landmark"] = name
                 empty["fascia_side"] = "mid"
+                if "bone" in data:
+                    empty["fascia_bone"] = data["bone"]
                 bpy.context.collection.objects.link(empty)
 
                 # Parent to horse body so everything moves together
@@ -788,6 +965,96 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
 
 
 # ─────────────────────────────────────────────────────────────────
+# TOOL 7 (Spec 7): BIND / CLEAR RIG
+# ─────────────────────────────────────────────────────────────────
+# These operators wire landmarks to armature bones and optionally
+# restore the default mesh-parenting. The chain:
+#   bone → landmark (bone parent) → muscle (object parent) → skin
+#
+# Each landmark is bone-parented to the nearest bone (or to the
+# bone named in its fascia_bone custom property, if set). Muscles
+# already parented to their origin landmark at generation time
+# (see generate_muscles) then follow the bones via the landmarks.
+# ─────────────────────────────────────────────────────────────────
+
+class FASCIA_OT_bind_landmarks_to_rig(bpy.types.Operator):
+    bl_idname = "fascia.bind_landmarks_to_rig"
+    bl_label = "Bind Landmarks to Rig"
+    bl_description = "Bone-parent every landmark to the nearest bone in the chosen armature (or to its fascia_bone if set)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        armature = context.scene.fascia_armature
+        if not armature or armature.type != 'ARMATURE':
+            self.report({'ERROR'}, "No armature selected — set the Rig property first")
+            return {"CANCELLED"}
+
+        landmarks = [obj for obj in bpy.data.objects
+                     if obj.get("fascia_type") == "landmark"]
+        if not landmarks:
+            self.report({'ERROR'}, "No landmarks found — place landmarks first")
+            return {"CANCELLED"}
+
+        bound = 0
+        skipped = 0
+        for lm in landmarks:
+            bone_name = lm.get("fascia_bone", "")
+            if not bone_name:
+                bone_name, _ = _find_nearest_bone(armature, lm.matrix_world.translation)
+            if not bone_name:
+                skipped += 1
+                continue
+            ok = _bone_parent_object(lm, armature, bone_name)
+            if ok:
+                bound += 1
+            else:
+                skipped += 1
+
+        context.view_layer.update()
+        self.report({'INFO'},
+                    str(bound) + " landmarks bound to rig (" + str(skipped) + " skipped)")
+        return {"FINISHED"}
+
+
+class FASCIA_OT_clear_rig_binding(bpy.types.Operator):
+    bl_idname = "fascia.clear_rig_binding"
+    bl_label = "Clear Rig Binding"
+    bl_description = "Unparent landmarks from bones and re-parent them to the base mesh (restores default state)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        body = _get_base_mesh()
+        landmarks = [obj for obj in bpy.data.objects
+                     if obj.get("fascia_type") == "landmark"]
+
+        cleared = 0
+        for lm in landmarks:
+            lm.parent = None
+            lm.parent_type = 'OBJECT'
+            lm.parent_bone = ""
+            lm.matrix_parent_inverse = mathutils.Matrix.Identity(4)
+            if "fascia_bone" in lm:
+                del lm["fascia_bone"]
+            if body:
+                bpy.ops.object.select_all(action='DESELECT')
+                body.select_set(True)
+                lm.select_set(True)
+                bpy.context.view_layer.objects.active = body
+                with bpy.context.temp_override(
+                    view_layer=context.view_layer,
+                    active_object=body,
+                    selected_editable_objects=[body, lm],
+                    object=body,
+                ):
+                    bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+            cleared += 1
+
+        context.view_layer.update()
+        self.report({'INFO'}, str(cleared) + " landmarks unbound (re-parented to base mesh)")
+        return {"FINISHED"}
+
+
+# ─────────────────────────────────────────────────────────────────
 # TOOL 4: GENERATE MUSCLES
 # ─────────────────────────────────────────────────────────────────
 # Reads the placed landmark positions and creates coloured,
@@ -799,7 +1066,7 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
 class FASCIA_OT_generate_muscles(bpy.types.Operator):
     bl_idname = "fascia.generate_muscles"
     bl_label = "Generate Muscles"
-    bl_description = "Generate muscle shapes between the placed landmarks"
+    bl_description = "Generate muscle shapes between the placed landmarks using the active species (file, inline JSON, or built-in horse)"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -837,13 +1104,21 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
         body = _get_base_mesh()
         base_size = _get_base_size(body) if body else 3.6
 
-        # Use species file if configured; fall back to embedded horse data
+        # Spec 9: resolve anatomy in priority order - file (Spec 6),
+        # inline JSON string (Spec 9), then embedded horse data.
         landmarks_data = HORSE_LANDMARKS
         muscles_data = HORSE_MUSCLES
         species_name = "Horse"
         species_path = context.scene.fascia_species_path
+        species_json = context.scene.fascia_species_json
         if species_path:
             loaded_lm, loaded_ms, loaded_name = _load_species(species_path)
+            if loaded_lm and loaded_ms:
+                landmarks_data = loaded_lm
+                muscles_data = loaded_ms
+                species_name = loaded_name or "Unknown"
+        elif species_json:
+            loaded_lm, loaded_ms, loaded_name = _load_species_json(species_json)
             if loaded_lm and loaded_ms:
                 landmarks_data = loaded_lm
                 muscles_data = loaded_ms
@@ -908,6 +1183,18 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                     obj["fascia_radius"] = mdata["radius"] * base_size
                     obj["fascia_rest_length"] = (p2 - p1).length
 
+                    # Spec 7: parent muscle to its origin landmark so it
+                    # follows the landmark (which follows the rig bone).
+                    # keep_transform=True preserves the just-set world transform.
+                    _object_parent_object(obj, from_obj)
+
+                    # Spec 8: Damped Track the muscle's local +Z (length axis)
+                    # at its insertion landmark so the muscle reorients toward
+                    # the insertion as the rig moves. Closes the Spec 7 section 7
+                    # 'wrong angle at insertion' gap. Rotation-only - volume
+                    # preservation unaffected. See _add_insertion_track_constraint.
+                    _add_insertion_track_constraint(obj, to_obj)
+
                     muscle_count += 1
             else:
                 # Both landmarks are midline — create one muscle, no mirroring
@@ -937,6 +1224,12 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                 obj["fascia_insertion"] = "Fascia_LM_" + to_key
                 obj["fascia_radius"] = mdata["radius"] * base_size
                 obj["fascia_rest_length"] = (p2 - p1).length
+
+                # Spec 7: parent muscle to its origin landmark.
+                _object_parent_object(obj, from_obj)
+
+                # Spec 8: Damped Track the muscle at its insertion landmark.
+                _add_insertion_track_constraint(obj, to_obj)
 
                 muscle_count += 1
 
@@ -1081,6 +1374,55 @@ class FASCIA_OT_bake_flex_pose(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# ─────────────────────────────────────────────────────────────────
+# TOOL 9 (Spec 9): STATUS QUERY (LLM-facing)
+# ─────────────────────────────────────────────────────────────────
+# Reports the current Fascia workflow state as a short plain-English
+# summary (base mesh, species, landmark/muscle counts, rig, flex).
+# Returns no mesh data (rule 5). Callable via bpy.ops.fascia.get_status()
+# by an external LLM through the Blender MCP server.
+# ─────────────────────────────────────────────────────────────────
+
+class FASCIA_OT_get_status(bpy.types.Operator):
+    bl_idname = "fascia.get_status"
+    bl_label = "Get Fascia Status"
+    bl_description = "Report the current Fascia workflow state — base, species, landmark/muscle counts, rig, flex. LLM-facing; returns no mesh data"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        scene = context.scene
+        body = _get_base_mesh()
+        base_name = body.name if body else "none"
+
+        # Resolve the active species name (same priority as operators)
+        species_name = "horse(default)"
+        species_path = scene.fascia_species_path
+        species_json = scene.fascia_species_json
+        if species_path:
+            _lm, _ms, loaded_name = _load_species(species_path)
+            if _lm:
+                species_name = loaded_name or "Unknown"
+        elif species_json:
+            _lm, _ms, loaded_name = _load_species_json(species_json)
+            if _lm:
+                species_name = loaded_name or "Unknown"
+
+        lm_count = sum(1 for o in bpy.data.objects if o.get("fascia_type") == "landmark")
+        muscle_count = sum(1 for o in bpy.data.objects if o.get("fascia_type") == "muscle")
+        rig_name = scene.fascia_armature.name if scene.fascia_armature else "none"
+
+        summary = (
+            "Fascia: base=" + base_name +
+            ", species=" + species_name +
+            ", landmarks=" + str(lm_count) +
+            ", muscles=" + str(muscle_count) +
+            ", rig=" + rig_name +
+            ", flex=" + str(round(scene.fascia_flex, 2))
+        )
+        self.report({'INFO'}, summary)
+        return {"FINISHED"}
+
+
 # This class defines the PANEL - the sidebar panel in Blender where the buttons and sliders live.
 class FASCIA_PT_main_panel(bpy.types.Panel):
     bl_label = "Fascia"
@@ -1103,6 +1445,7 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
 
         # Species file selector (Spec 6). Empty = use built-in horse.
         layout.prop(scene, "fascia_species_path", text="Species File")
+        layout.prop(scene, "fascia_species_json", text="Species JSON")
         
         # Add a visual separator line
         layout.separator()
@@ -1136,6 +1479,14 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
             row = layout.row()
             row.label(text="Landmarks: " + str(lm_count))
             row.label(text="Muscles: " + str(muscle_count))
+
+        # ── Rig section (Spec 7) ─────────────────────────────
+        layout.separator()
+        layout.label(text="Rig:")
+        layout.prop(scene, "fascia_armature", text="Rig")
+        if scene.fascia_armature:
+            layout.operator("fascia.bind_landmarks_to_rig", icon="ARMATURE_DATA")
+            layout.operator("fascia.clear_rig_binding", icon="X")
 
         # ── Simulation section (Tools 5-7) ───────────────────
         layout.separator()
@@ -1226,8 +1577,11 @@ classes = (
     FASCIA_OT_use_selected_as_base,
     FASCIA_OT_place_landmarks,
     FASCIA_OT_generate_muscles,
+    FASCIA_OT_bind_landmarks_to_rig,
+    FASCIA_OT_clear_rig_binding,
     FASCIA_OT_simulate_motion,
     FASCIA_OT_bake_flex_pose,
+    FASCIA_OT_get_status,
     FASCIA_PT_main_panel,
 )
 
@@ -1313,6 +1667,23 @@ def register():
         subtype='FILE_PATH',
     )
 
+    # Inline species JSON (Spec 9). Empty = fall back to fascia_species_path
+    # or embedded horse data. Set by the LLM to pass anatomy without a file.
+    bpy.types.Scene.fascia_species_json = bpy.props.StringProperty(
+        name="Species JSON",
+        description="Inline species-definition JSON string. Empty = use Species File or built-in horse anatomy",
+        default="",
+        subtype='NONE',
+    )
+
+    # Armature for rig binding (Spec 7). None = landmarks stay parented to base mesh.
+    bpy.types.Scene.fascia_armature = bpy.props.PointerProperty(
+        name="Rig",
+        description="Armature object to bind landmarks to. None = landmarks stay parented to the base mesh",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == 'ARMATURE',
+    )
+
 
 def unregister():
     # Remove the CollectionProperty and IntProperty BEFORE unregistering
@@ -1327,6 +1698,8 @@ def unregister():
 
     # Remove the custom Scene properties so we don't leave clutter behind
     del bpy.types.Scene.fascia_species_path
+    del bpy.types.Scene.fascia_species_json
+    del bpy.types.Scene.fascia_armature
     del bpy.types.Scene.fascia_age
     del bpy.types.Scene.fascia_fat
     del bpy.types.Scene.fascia_color
