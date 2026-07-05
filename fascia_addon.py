@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Fascia",
     "author": "Fascia contributors",
-    "version": (0, 0, 4),
+    "version": (0, 1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Fascia",
     "description": "Fascia creature soft-tissue toolbox — landmarks, muscles, skin binding, flex baking",
@@ -612,6 +612,13 @@ def update_flex(self, context):
         radius = m.get("fascia_radius", 0.04)
         muscle_info.append((center, radius, ts_i))
 
+    # Spec 11: Build KDTree for spatial acceleration
+    from mathutils.kdtree import KDTree
+    kd = KDTree(len(muscle_info))
+    for idx, (m_center, m_radius, m_ts_i) in enumerate(muscle_info):
+        kd.insert(m_center, idx)
+    kd.balance()
+
     for obj in skin_objects:
         mesh = obj.data
 
@@ -658,17 +665,16 @@ def update_flex(self, context):
             push = mathutils.Vector((0.0, 0.0, 0.0))
             was_affected = False
 
-            for (m_center, m_radius, m_ts_i) in muscle_info:
-                delta = world_pos - m_center
-                dist = delta.length
-
-                if dist < influence_radius and dist > 0.001:
-                    t = dist / influence_radius
-                    falloff = (1.0 - t) * (1.0 - t)
-                    growth = m_radius * (m_ts_i - 1.0)
-                    push_dir = delta.normalized()
-                    push += push_dir * growth * falloff
-                    was_affected = True
+            for (_idx, dist, _co) in kd.find_range(world_pos, influence_radius):
+                if dist < 0.001:
+                    continue
+                m_center, m_radius, m_ts_i = muscle_info[_idx]
+                t = dist / influence_radius
+                falloff = (1.0 - t) * (1.0 - t)
+                growth = m_radius * (m_ts_i - 1.0)
+                push_dir = (world_pos - m_center).normalized()
+                push += push_dir * growth * falloff
+                was_affected = True
 
             if was_affected:
                 new_world_pos = world_pos + push
