@@ -88,7 +88,7 @@ Fascia's contraction is **geometric and volume-preserving**, not an FEM physics 
 
 ## 4. Current Code State
 
-`fascia_addon.py` is a working **v0 prototype** — a single ~1700-line file. All nine tools exist and connect. The pipeline is visible end-to-end. The critical "wires" are in place: anatomy input slot (Spec 6), rig binding (Spec 7), muscle insertion tracking (Spec 8), and LLM-facing surface (Spec 9). The remaining work is tissue-math refinements (antagonist pairing, skin sliding, performance) and production hardening.
+`fascia_addon.py` is a working **v1 prototype** — a single ~1780-line file. All nine tools exist and connect. The pipeline is visible end-to-end. The critical "wires" are in place: anatomy input slot (Spec 6), rig binding (Spec 7), muscle insertion tracking (Spec 8), and LLM-facing surface (Spec 9). Key tissue-math refinements are complete: antagonist pairing (Spec 10) and KDTree spatial acceleration (Spec 11). The remaining work is skin sliding and production hardening.
 
 ### The Nine Tools
 
@@ -97,8 +97,8 @@ Fascia's contraction is **geometric and volume-preserving**, not an FEM physics 
 | 1 | Load Horse Base | Placeholder + "Use Selected as Base" | Old button creates a blob (two spheres). The "Use Selected as Base" button lets the user tag any mesh as the base — that is the real direction. |
 | 2 | Customize Sliders | Placeholder | Age/Fat/Color affect object scale and viewport color. No operator — driven by slider callbacks. |
 | 3 | Place Landmarks | Real | Positions are normalized (0-1) UVW and map to the base mesh's bounding box. Works on any mesh. Accepts anatomy from file (Spec 6), inline JSON (Spec 9), or embedded horse data. Landmarks can be bone-parented to a rig (Spec 7). Pose-dependent: correct for a standing four-square pose, off on extreme poses (grazing/rearing/galloping) — documented bounding-box limitation. |
-| 4 | Generate Muscles | Real (mesh-agnostic sizing, pinned origin, insertion tracking) | Creates stretched spheres between landmarks. Radii + influence radius scale with base mesh size (Spec 2). Origin end pinned at `from` landmark (Spec 4). Contraction is volume-preserving (Spec 3). Muscle reorients toward the insertion landmark via Damped Track constraint (Spec 8). Accepts anatomy from file, inline JSON, or embedded (Spec 6/9). |
-| 5 | Bind Skin to Muscles | Working, safe | Flex slider SHORTENS muscles (local Z) and BULGES thickness (local X/Y) by `1/√(1−c)`, preserving volume. Origin end stays pinned; insertion shortens toward origin along the Damped-Track-reoriented direction. Per-muscle recruitment multiplier (Spec 5). Skin-push center tracks the flexed belly. Skin-push axis follows the Damped Track rotation (Spec 7 flex fix). Pushes nearby skin vertices with distance falloff. Shape-key-safe (see section 5). |
+| 4 | Generate Muscles | Real (mesh-agnostic sizing, pinned origin, insertion tracking) | Creates stretched spheres between landmarks. Radii + influence radius scale with base mesh size (Spec 2). Origin end pinned at `from` landmark (Spec 4). Contraction is volume-preserving (Spec 3). Muscle reorients toward the insertion landmark via Damped Track constraint (Spec 8). Stores antagonist pairings (Spec 10). Accepts anatomy from file, inline JSON, or embedded (Spec 6/9). |
+| 5 | Bind Skin to Muscles | Working, safe | Flex slider SHORTENS muscles (local Z) and BULGES thickness (local X/Y) by `1/√(1−c)`, preserving volume. Origin end stays pinned; insertion shortens toward origin along the Damped-Track-reoriented direction. Per-muscle recruitment multiplier (Spec 5). Applies antagonist relaxation (Spec 10). Skin-push center tracks the flexed belly. Skin-push axis follows the Damped Track rotation (Spec 7 flex fix). Pushes nearby skin vertices with distance falloff using a KDTree spatial index for real-time performance (Spec 11). Shape-key-safe (see section 5). |
 | 6 | Simulate Motion | v0 placeholder | Keyframes flex value over 60 frames. Not real physics. Checks that muscles exist before running. |
 | 7 | Bake Result | v0, fixed | Samples the flex animation into `Baked_Frame_NNN` shape keys. Capture order fixed (captures flexed pose before creating Basis). Checks that muscles exist before running. |
 | 8 | Bind/Clear Rig (Spec 7) | Real | Operators `fascia.bind_landmarks_to_rig` and `fascia.clear_rig_binding`. Auto-binds each landmark to the nearest bone, or uses explicit `fascia_bone`. Clear restores mesh-parenting. The chain: bone → landmark (bone parent) → muscle (object parent) → skin bulge (depsgraph-evaluated). |
@@ -117,6 +117,8 @@ Fascia's contraction is **geometric and volume-preserving**, not an FEM physics 
 - Rig binding: bone-parented landmarks + muscle-to-landmark parenting (Spec 7).
 - Muscle insertion tracking: Damped Track reorients muscle toward insertion landmark (Spec 8).
 - LLM-facing surface: inline `fascia_species_json` property + `fascia.get_status` operator (Spec 9).
+- Antagonist muscle pairing (Spec 10) - reciprocal inhibition and side-specific relaxation.
+- KDTree spatial acceleration (Spec 11) - range queries speed up the skin-push loop for high-vertex meshes.
 
 **Placeholder / not real yet:**
 - No real horse base mesh or skeleton.
@@ -125,7 +127,6 @@ Fascia's contraction is **geometric and volume-preserving**, not an FEM physics 
 - No built-in LLM or AI assistant.
 - No production-ready Weta/Ziva-level tissue system.
 - The Damped Track fixes the direction toward the insertion landmark, but the far end is at `rest_length·ls` — it does not stretch to exactly reach the insertion (geometric length mismatch remains, Spec 4 §2).
-- Per-muscle recruitment controls exist (Spec 5) but no antagonist pairing yet.
 - Radial skin push only (no tangential skin sliding).
 
 ## 5. Shape Key Safety Rules
@@ -144,8 +145,6 @@ The code uses `Basis`, `Live_Flex`, and baked frame shape keys. These rules are 
 Known scope limits (documented in code comments — these are honest boundaries, not bugs):
 - **Muscle reorients toward insertion but does not stretch to reach it.** Spec 8 adds a Damped Track constraint so the muscle's local +Z points at the insertion landmark (fixing the "wrong angle" from Spec 7 §7). However the far end is at `rest_length·ls` along that direction — it does NOT stretch to exactly reach the insertion. If the insertion moves closer than `rest_length·ls`, the far end overshoots; if farther, it undershoots. This is the pre-existing Spec 4 §2 "insertion length mismatch" — Spec 8 narrowed it from "gap + wrong angle" to "length mismatch only."
 - **Radial skin push only:** axial shortening does not directly deform the skin. Skin slides tangentially over tissue as a future refinement.
-- **Per-muscle recruitment exists (Spec 5); antagonist pairing does not.**
-- **No antagonist relaxation.**
 
 Minor code smells (safe to leave, not urgent):
 - `update_horse(None, context)` and `update_flex(None, context)` pass None as self — works but is a code smell.
@@ -172,6 +171,8 @@ Per rule 9: do not spend tokens tuning the tool to this specific mesh. The tool 
 - **Spec 7 — Rig binding (DONE):** Landmarks bone-parent to armature bones via `parent_set(type='BONE', keep_transform=True)` with `armature.data.bones.active` set. New `fascia_armature` PointerProperty (poll: ARMATURE type), operators `fascia.bind_landmarks_to_rig` (auto-bind or explicit via `fascia_bone`) and `fascia.clear_rig_binding` (restores mesh-parenting). Muscles parented to their origin landmark at generation time via `_object_parent_object()`. Flex code fixed: reads world rotation from `matrix_world.to_quaternion()` instead of `rotation_quaternion`; `context.view_layer.update()` before reading parented transforms. Panel has a new Rig section. All 10 edits verified: 29/29 landmarks bound, world positions preserved, bone→landmark→muscle→skin chain verified, volume preservation unchanged (1.0), clear binding restores default state. `specs/07_rig_binding.md`.
 - **Spec 8 — Muscle insertion tracking (DONE):** `DAMPED_TRACK` constraint added on each muscle targeting its insertion landmark at generation time. New `_add_insertion_track_constraint()` helper (rotation-only — does NOT affect `obj.scale`, so volume preservation is untouched). Two call sites in `generate_muscles` (bilateral + midline branches), one line each after the existing Spec 7 `_object_parent_object()` call. The Spec 7 flex fix (`matrix_world.to_quaternion()` + depsgraph update) already covers constraint-evaluated rotation, so `update_flex` needed zero changes. Updated KNOWN LIMITATION comment in `create_muscle_mesh` (Spec 4 §2 narrowed from "gap + wrong angle" to "length mismatch only"). All 8 verification checks passed: at-rest identical, all 29 muscles have constraint, reorients on insertion move (4.24° for 30° bone rotation), origin stays pinned (drift=0.0), volume preserved (1.0), skin-push axis aligns to insertion direction (7e-8 error), clear binding compatible, far end tracks direction (error=0.0). `specs/08_muscle_insertion_tracking.md`.
 - **Spec 9 — LLM-facing surface (DONE):** New `Scene.fascia_species_json` StringProperty so an external LLM can pass anatomy inline without writing a file to disk. New `_load_species_json()` helper — same schema and return contract as `_load_species` (Spec 6), but operates on a JSON string instead of a file path. Three-tier species resolution in both `place_landmarks` and `generate_muscles`: file path (Spec 6) → inline JSON string (Spec 9) → embedded horse data. New `FASCIA_OT_get_status` operator (`fascia.get_status`) returns a short plain-English summary string via `self.report()` — no mesh data. All 8 verification checks passed: property exists, inline JSON overrides embedded (3 landmarks, 2 muscles for Alien), file beats JSON string (29 landmarks, 29 muscles), invalid JSON falls back gracefully, empty+empty=embedded horse (no-regression), status query works with and without a base mesh. `specs/09_llm_facing_surface.md`.
+- **Spec 10 — Antagonist pairing (DONE):** Opposing muscle pairs defined in the species data automatically relax the reciprocal antagonist muscle proportionally to agonist contraction (with left/right side-specific suffix matching). Stored as `fascia_antagonist` on generated muscle objects. `specs/10_antagonist_pairing.md`.
+- **Spec 11 — KDTree acceleration (DONE):** Spatial ranges query using a balanced `mathutils.kdtree.KDTree` of muscle centers reduces skin-push lookup complexity from $O(V \cdot M)$ to $O(V \cdot \log(M))$, permitting interactive editing of high-vertex skin meshes. `specs/11_kdtree_acceleration.md`.
 
 ## 9. Agentic Engineering Workflow
 
@@ -211,10 +212,8 @@ Kun's full stack includes `firstmate` — an orchestrator that spawns parallel c
 
 ### Tissue-math refinements (next priority)
 
-1. **Antagonist muscle pairing** — when one muscle contracts, its antagonist relaxes. Now fully unblocked: per-muscle recruitment (Spec 5), rig binding (Spec 7), muscle insertion tracking (Spec 8), and LLM-facing surface (Spec 9) are all in place. The LLM can define pairing data; the flex loop auto-relaxes paired muscles. This is the highest-impact tissue-math improvement.
-2. **Skin sliding** — skin moves tangentially over tissue, not just pushed radially. The real differentiator vs. Weta/Ziva. Depends on real muscle bulges (done, Spec 3), correct axial motion (done, Spec 4), and correct muscle direction (done, Spec 8). Unblocked for single-bone tests.
-3. **`update_flex` performance** — the skin-push loop is pure Python and times out on the 748k-vertex test mesh at flex>0. Needs spatial acceleration (BVH or kdtree) or a GPU/geometry-nodes approach. Becoming a practical blocker for skin sliding tests on real meshes.
-4. **Standing-pose test mesh** for full landmark verification.
+1. **Skin sliding** — skin moves tangentially over tissue, not just pushed radially. The real differentiator vs. Weta/Ziva. Depends on real muscle bulges (done, Spec 3), correct axial motion (done, Spec 4), and correct muscle direction (done, Spec 8). Unblocked for single-bone tests.
+2. **Standing-pose test mesh** for full landmark verification.
 5. **Split `fascia_addon.py` into modules** (`landmarks.py`, `muscles.py`, `flex.py`, `panel.py`, `__init__.py`) — only when parallel editing becomes a bottleneck. Not urgent.
 6. **Fascia MCP bridge** — optional follow-on to Spec 9. Register dedicated MCP tools wrapping `bpy.ops.fascia.*` so they appear as first-class MCP tools rather than raw Python calls. Separate addon potential; out of scope for the core Fascia add-on.
 

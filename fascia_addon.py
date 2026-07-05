@@ -548,7 +548,22 @@ def update_flex(self, context):
     for obj in muscles:
         ant = obj.get("fascia_antagonist", "")
         if ant:
-            ant_objs = [m for m in muscles if ant in m.name]
+            # Side suffix resolution: left muscle relaxes left antagonist, etc.
+            side_suffix = ""
+            if obj.name.endswith("_L"):
+                side_suffix = "_L"
+            elif obj.name.endswith("_R"):
+                side_suffix = "_R"
+
+            if side_suffix:
+                # First try matching with the same side suffix (e.g. Triceps_L)
+                ant_objs = [m for m in muscles if (ant + side_suffix) in m.name]
+                if not ant_objs:
+                    # Fallback to general substring match
+                    ant_objs = [m for m in muscles if ant in m.name]
+            else:
+                ant_objs = [m for m in muscles if ant in m.name]
+
             for ant_obj in ant_objs:
                 antagonist_map.setdefault(ant_obj.name, []).append(obj)
 
@@ -1586,7 +1601,7 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
 #   c_i = flex * MAX_CONTRACTION * recruitment_i
 # This lets the user make individual muscles contract harder, softer,
 # or not at all, while the global Flex slider stays the master drive.
-# Antagonist pairing (auto-relax reciprocal muscles) is future work.
+# Antagonist pairing (auto-relax reciprocal muscles) is supported (Spec 10).
 
 class FasciaMuscleRecruitment(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(
