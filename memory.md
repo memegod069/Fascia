@@ -228,3 +228,41 @@ Any external LLM using the Blender MCP server can now:
 - Trust that the bone → landmark → muscle → skin chain is complete on both ends (origin pinned, insertion tracked by Damped Track).
 
 Do not try to do everything at once. The tissue math builds on the wires; polish the wires first when gaps appear.
+
+## 11. OSS Improvements (2026-07-06)
+
+The following OSS scaffolding was added to raise contributor readiness:
+
+**Added files:**
+- `LICENSE` (MIT)
+- `.gitignore` (comprehensive: Blender, OS, IDE, packaging, AI scaffolding)
+- `CONTRIBUTING.md` (setup, spec process, code style, PR expectations)
+- `CHANGELOG.md` (Keep a Changelog format, seeded from git history)
+- `.github/ISSUE_TEMPLATE/bug_report.md`
+- `.github/ISSUE_TEMPLATE/feature_request.md`
+- `.github/PULL_REQUEST_TEMPLATE.md`
+- `.github/workflows/lint.yml` (py_compile + pure-function smoke tests)
+- `docs/llm-integration.md` (LLM usage guide, alien anatomy example)
+- `docs/species-schema.md` (full JSON schema reference, biped example)
+- `tests/smoke_test.py` (8 pure-function tests, zero Blender dependency)
+- `blender_manifest.toml` (Blender 4.2+ Extension system support)
+- `README.md` rewritten (install guide, quick start, limitations table, LLM surface)
+
+**Bug fixes in fascia_addon.py:**
+- Issue 2: `bpy.path.abspath()` for `//` relative paths in `_load_species`
+- Issue 3: `poll(cls, context)` added to all 9 operators (Object Mode gate)
+- Issue 4+13: `_validate_species_data()` helper; pre-loop landmark ref check; auto-pad 3-element colors
+- Issue 5: `update=update_flex` on `recruitment` property and `fascia_skin_sliding`
+- Issue 6: Removed double `update_flex` calls in `simulate_motion` and `bake_flex_pose`
+- Issue 9: Save/restore selection state in `bind_landmarks_to_rig` and `clear_rig_binding`
+- Issue 10: Clear `Live_Flex.data` to Basis when flex returns to 0
+- Issue 12: `max(flex * MAX_CONTRACTION, 1e-9)` safe floor for antagonist division
+- Issue 14: `NuchalCrest`, `FrontKnee`, `BellyMid` marked RESERVED in both code and JSON
+- Issue 15: Robust color unpack via index access instead of tuple unpack
+- Issue 16: Bake reads from Basis shape key, not `mesh.vertices`, at flex=0 frames
+- Issue 17: Dynamic species label in panel from resolved species name
+- Issue 18: `_fascia_species_name` cached in scene after landmarks/muscles placed
+- Issue 19: World matrix saved before clearing rig parent in `clear_rig_binding`
+- Issue 20: Right-side bilateral landmarks get `.L→.R` mirrored bone name from species JSON
+- Issue 21: Auto-bind fallback when explicit bone name is stale/missing from armature
+- Honest physics callout added to Flex slider area in panel UI

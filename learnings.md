@@ -92,3 +92,17 @@ The bug was latent because `MUSCLE_INFLUENCE_FRACTION = 0.083` produced `influen
 Spec 12's axial slide required a larger search radius (`influence_radius + max_half_rest_length`), which exposed the bug. Fix: unpack as `for (_co, idx, dist)` and use `idx` as the list index. The distance check `if dist < 0.001` now correctly uses the actual distance (float) instead of the muscle index (int).
 
 Evidence: Spec 12 verification (the first flex=1 call with skin_sliding=True errored with `TypeError: list indices must be integers or slices, not Vector`). After the fix, all 10 verification checks passed and 368k vertices were correctly displaced.
+
+---
+
+## 2026-07-06: Key OSS improvement gotchas
+
+**poll() required on all operators:** Without `context.mode == 'OBJECT'` guard, Fascia buttons crash in Edit/Sculpt/Weight Paint with a context traceback and may leave partial objects in scene.
+
+**bpy.path.abspath() for // paths:** Blender's file picker stores paths as `//relative`. Python's `os.path.isfile` cannot resolve `//`. Always call `bpy.path.abspath(filepath)` before any file check.
+
+**update= on PropertyGroup FloatProperty:** A `FloatProperty` inside a `PropertyGroup` supports `update=` callback — it fires on change just like Scene properties. Use this to trigger `update_flex` from recruitment slider without a separate redraw hack.
+
+**Save matrix_world before clearing parent:** Setting `obj.parent = None` without saving `obj.matrix_world.copy()` first causes Blender to snap the object to wrong world position when the parent was a posed bone. Fix: save → clear → restore matrix_world.
+
+**Bilateral landmark bone name mirroring:** Copying the same explicit bone name to both _L and _R landmarks causes both to bind to the left-side bone. Swap `.L→.R`, `_L→_R`, `left→right` for the _R side.

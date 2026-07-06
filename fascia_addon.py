@@ -155,9 +155,13 @@ def _load_species(filepath):
     not validated — bad data surfaces as key errors
     at the operator level.
     """
-    if not os.path.isfile(filepath):
-        print("Fascia: species file not found: " + filepath)
+    # Resolve Blender-relative paths (starting with //) to absolute paths.
+    # bpy.path.abspath handles // correctly; os.path.isfile does not.
+    abs_path = bpy.path.abspath(filepath)
+    if not os.path.isfile(abs_path):
+        print("Fascia: species file not found: " + abs_path)
         return None, None, None
+    filepath = abs_path
 
     try:
         with open(filepath, "r") as f:
@@ -197,6 +201,53 @@ def _load_species_json(json_str):
         return None, None, None
 
     return data["landmarks"], data["muscles"], data.get("name", "Unknown")
+
+
+def _validate_species_data(landmarks_data, muscles_data, context_label="species"):
+    """Validate species landmark and muscle dicts before any scene modification.
+
+    Checks that:
+    - Every landmark has a 'pos' key with a 3-element list.
+    - Every muscle has 'from', 'to', and 'radius' keys.
+    - Every muscle's 'from' and 'to' reference a known landmark name.
+    - Colors (if present) have 3 or 4 elements (auto-pads 3-element colors to RGBA).
+
+    Returns (errors, warnings) where each is a list of strings.
+    errors = problems that should abort the operation.
+    warnings = problems that are auto-corrected or non-fatal.
+    """
+    errors = []
+    warnings = []
+
+    # Validate landmarks
+    for name, data in landmarks_data.items():
+        pos = data.get("pos")
+        if pos is None:
+            errors.append(f"{context_label}: landmark '{name}' missing 'pos' key")
+        elif not isinstance(pos, (list, tuple)) or len(pos) != 3:
+            errors.append(f"{context_label}: landmark '{name}' 'pos' must be a 3-element list")
+
+    # Validate muscles
+    known_landmarks = set(landmarks_data.keys())
+    for name, data in muscles_data.items():
+        for key in ("from", "to", "radius"):
+            if key not in data:
+                errors.append(f"{context_label}: muscle '{name}' missing '{key}' key")
+        from_key = data.get("from", "")
+        to_key = data.get("to", "")
+        if from_key and from_key not in known_landmarks:
+            errors.append(f"{context_label}: muscle '{name}' 'from' references unknown landmark '{from_key}'")
+        if to_key and to_key not in known_landmarks:
+            errors.append(f"{context_label}: muscle '{name}' 'to' references unknown landmark '{to_key}'")
+        color = data.get("color")
+        if color is not None:
+            if len(color) == 3:
+                data["color"] = list(color) + [1.0]
+                warnings.append(f"{context_label}: muscle '{name}' color auto-padded to RGBA")
+            elif len(color) != 4:
+                errors.append(f"{context_label}: muscle '{name}' 'color' must be 3 or 4 elements")
+
+    return errors, warnings
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -369,6 +420,7 @@ def _clear_skin_tags():
 HORSE_LANDMARKS = {
     # Head & Neck (midline)
     "Poll":            {"pos": (0.840, 0.500, 0.920), "bilateral": False, "region": "head"},
+    # RESERVED: NuchalCrest — future neck muscle attachment (no muscle assigned yet).
     "NuchalCrest":     {"pos": (0.825, 0.500, 0.880), "bilateral": False, "region": "neck"},
 
     # Shoulder & Forelimb
@@ -376,11 +428,13 @@ HORSE_LANDMARKS = {
     "ScapulaTop":      {"pos": (0.660, 0.670, 0.920), "bilateral": True,  "region": "shoulder"},
     "PointOfShoulder": {"pos": (0.700, 0.720, 0.780), "bilateral": True,  "region": "shoulder"},
     "Elbow":           {"pos": (0.680, 0.650, 0.530), "bilateral": True,  "region": "forelimb"},
+    # RESERVED: FrontKnee — future cannon-bone muscle attachment (bilateral; no muscle yet).
     "FrontKnee":       {"pos": (0.660, 0.630, 0.430), "bilateral": True,  "region": "forelimb"},
 
     # Trunk / Torso (midline)
     "Chest":           {"pos": (0.580, 0.500, 0.420), "bilateral": False, "region": "chest"},
     "MidBack":         {"pos": (0.500, 0.500, 0.950), "bilateral": False, "region": "back"},
+    # RESERVED: BellyMid — future abdominal muscle attachment (no muscle assigned yet).
     "BellyMid":        {"pos": (0.450, 0.500, 0.380), "bilateral": False, "region": "belly"},
 
     # Hip & Hindlimb
@@ -474,8 +528,8 @@ def update_horse(self, context):
         # Apply the RGB color picker value to the body's viewport color.
         # Blender expects 4 values (Red, Green, Blue, Alpha/Opacity).
         # We set Alpha to 1.0 so it is solid (not see-through).
-        r, g, b = scene.fascia_color
-        body.color = (r, g, b, 1.0)
+        col = scene.fascia_color
+        body.color = (col[0], col[1], col[2], 1.0)
 
     # 2. Update the head of the horse
     head = bpy.data.objects.get("Fascia_Horse_Head")
@@ -488,8 +542,8 @@ def update_horse(self, context):
         head.scale = (age_scale, age_scale, age_scale)
 
         # Apply the same viewport color to the head.
-        r, g, b = scene.fascia_color
-        head.color = (r, g, b, 1.0)
+        col = scene.fascia_color
+        head.color = (col[0], col[1], col[2], 1.0)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -633,7 +687,9 @@ def update_flex(self, context):
     # full antagonist contraction = full relaxation (c_B * 0.0).
     # Saturated at 1.0 so relaxation never exceeds the muscle's
     # own contraction.
-    max_c_total = flex * MAX_CONTRACTION if flex > 0.001 else 1.0
+    # Safe floor prevents ZeroDivisionError in antagonist ratio.
+    # 1e-9 floor is correct for all flex values, not just the > 0.001 case.
+    max_c_total = max(flex * MAX_CONTRACTION, 1e-9)
     relaxation_map = {}
     for m_name, aggressors in antagonist_map.items():
         max_relax = 0.0
@@ -756,6 +812,13 @@ def update_flex(self, context):
 
             if flex < 0.001:
                 live_key.value = 0.0
+                # Write Basis coordinates into Live_Flex so external tools reading
+                # shape key data directly see rest-pose positions, not stale flexed
+                # positions (Issue 10). Weight is 0.0 so no visual change.
+                basis_key = mesh.shape_keys.key_blocks.get("Basis")
+                if basis_key:
+                    for i, bv in enumerate(basis_key.data):
+                        live_key.data[i].co = bv.co.copy()
                 mesh.update()
                 continue
 
@@ -940,6 +1003,12 @@ class FASCIA_OT_make_placeholder_horse(bpy.types.Operator):
     bl_description = "Adds a rough placeholder shape where a real horse will go later"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
         # Clear any saved vertex backups and skin tags from a previous base,
         # since the old mesh data is no longer valid.
@@ -981,6 +1050,12 @@ class FASCIA_OT_use_selected_as_base(bpy.types.Operator):
     bl_description = "Tag the selected mesh as the Fascia base creature mesh"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
         obj = context.active_object
         if not obj or obj.type != 'MESH':
@@ -1012,6 +1087,12 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
     bl_description = "Place anatomical landmark points on the base mesh using the active species (file, inline JSON, or built-in horse)"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
         # Check that a base mesh exists
         body = _get_base_mesh()
@@ -1030,19 +1111,30 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
         # Spec 9: resolve anatomy in priority order - file (Spec 6),
         # inline JSON string (Spec 9), then embedded horse data.
         landmarks_data = HORSE_LANDMARKS
+        muscles_data = HORSE_MUSCLES
         species_name = "Horse"
         species_path = context.scene.fascia_species_path
         species_json = context.scene.fascia_species_json
         if species_path:
-            loaded_lm, _loaded_ms, loaded_name = _load_species(species_path)
+            loaded_lm, loaded_ms, loaded_name = _load_species(species_path)
             if loaded_lm:
                 landmarks_data = loaded_lm
+                muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
         elif species_json:
-            loaded_lm, _loaded_ms, loaded_name = _load_species_json(species_json)
+            loaded_lm, loaded_ms, loaded_name = _load_species_json(species_json)
             if loaded_lm:
                 landmarks_data = loaded_lm
+                muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
+
+        errors, warnings = _validate_species_data(landmarks_data, muscles_data, context_label=species_name)
+        for w in warnings:
+            self.report({'WARNING'}, w)
+        if errors:
+            for e in errors:
+                self.report({'ERROR'}, e)
+            return {'CANCELLED'}
 
         # Clean up any previously placed landmarks so we don't get duplicates
         old_landmarks = [obj for obj in bpy.data.objects
@@ -1077,7 +1169,18 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
                     empty["fascia_landmark"] = name
                     empty["fascia_side"] = suffix.strip("_")
                     if "bone" in data:
-                        empty["fascia_bone"] = data["bone"]
+                        bone_name = data["bone"]
+                        if suffix == "_R":
+                            # Derive the right-side bone name by swapping common left-side
+                            # suffixes. If the derived name doesn't exist in the armature at
+                            # bind time, FASCIA_OT_bind_landmarks_to_rig will fall back to
+                            # nearest-bone auto-binding (Issue 21 fix).
+                            bone_name = (bone_name
+                                .replace(".L", ".R")
+                                .replace("_L", "_R")
+                                .replace("left", "right")
+                                .replace("Left", "Right"))
+                        empty["fascia_bone"] = bone_name
                     bpy.context.collection.objects.link(empty)
 
                     # Parent to horse body so everything moves together
@@ -1115,6 +1218,10 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
         # Make sure Blender recalculates all object positions
         context.view_layer.update()
 
+        # Cache the resolved species name so get_status can read it without
+        # re-parsing the species file on every call (Issue 18).
+        context.scene["_fascia_species_name"] = species_name
+
         self.report({'INFO'}, str(placed_count) + " landmarks placed for " + species_name)
         return {"FINISHED"}
 
@@ -1138,7 +1245,17 @@ class FASCIA_OT_bind_landmarks_to_rig(bpy.types.Operator):
     bl_description = "Bone-parent every landmark to the nearest bone in the chosen armature (or to its fascia_bone if set)"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
+        # Preserve selection so internal deselect/reselect doesn't destroy user state (Issue 9).
+        saved_active = context.view_layer.objects.active
+        saved_selected = list(context.selected_objects)
+
         armature = context.scene.fascia_armature
         if not armature or armature.type != 'ARMATURE':
             self.report({'ERROR'}, "No armature selected — set the Rig property first")
@@ -1154,20 +1271,38 @@ class FASCIA_OT_bind_landmarks_to_rig(bpy.types.Operator):
         skipped = 0
         for lm in landmarks:
             bone_name = lm.get("fascia_bone", "")
-            if not bone_name:
+            used_fallback = False
+
+            # If explicit bone name is set but not in this armature (renamed rig,
+            # or JSON from a different creature), fall back to auto nearest-bone
+            # rather than silently skipping the landmark (Issue 21).
+            if bone_name and bone_name not in armature.data.bones:
                 bone_name, _ = _find_nearest_bone(armature, lm.matrix_world.translation)
+                used_fallback = True
+            elif not bone_name:
+                bone_name, _ = _find_nearest_bone(armature, lm.matrix_world.translation)
+
             if not bone_name:
                 skipped += 1
                 continue
+
             ok = _bone_parent_object(lm, armature, bone_name)
             if ok:
                 bound += 1
+                if used_fallback:
+                    self.report({'WARNING'}, f"Fascia: '{lm.name}' used fallback binding (explicit bone not found)")
             else:
                 skipped += 1
 
         context.view_layer.update()
         self.report({'INFO'},
                     str(bound) + " landmarks bound to rig (" + str(skipped) + " skipped)")
+
+        # Restore user's selection state.
+        for obj in context.view_layer.objects:
+            obj.select_set(obj in saved_selected)
+        context.view_layer.objects.active = saved_active
+
         return {"FINISHED"}
 
 
@@ -1177,17 +1312,34 @@ class FASCIA_OT_clear_rig_binding(bpy.types.Operator):
     bl_description = "Unparent landmarks from bones and re-parent them to the base mesh (restores default state)"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
+        # Preserve selection so internal deselect/reselect doesn't destroy user state (Issue 9).
+        saved_active = context.view_layer.objects.active
+        saved_selected = list(context.selected_objects)
+
         body = _get_base_mesh()
         landmarks = [obj for obj in bpy.data.objects
                      if obj.get("fascia_type") == "landmark"]
 
         cleared = 0
         for lm in landmarks:
+            # Capture world position BEFORE clearing the parent relationship.
+            # Setting lm.parent = None without first saving the world matrix
+            # causes Blender to recompute position from local (bone-relative)
+            # coordinates, snapping the landmark to the wrong world location
+            # when the rig is in a non-rest pose (Issue 19).
+            saved_world = lm.matrix_world.copy()
             lm.parent = None
             lm.parent_type = 'OBJECT'
             lm.parent_bone = ""
             lm.matrix_parent_inverse = mathutils.Matrix.Identity(4)
+            lm.matrix_world = saved_world
             if "fascia_bone" in lm:
                 del lm["fascia_bone"]
             if body:
@@ -1206,6 +1358,12 @@ class FASCIA_OT_clear_rig_binding(bpy.types.Operator):
 
         context.view_layer.update()
         self.report({'INFO'}, str(cleared) + " landmarks unbound (re-parented to base mesh)")
+
+        # Restore user's selection state.
+        for obj in context.view_layer.objects:
+            obj.select_set(obj in saved_selected)
+        context.view_layer.objects.active = saved_active
+
         return {"FINISHED"}
 
 
@@ -1223,6 +1381,12 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
     bl_label = "Generate Muscles"
     bl_description = "Generate muscle shapes between the placed landmarks using the active species (file, inline JSON, or built-in horse)"
     bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
 
     def execute(self, context):
         # Check that landmarks exist first
@@ -1278,6 +1442,14 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                 landmarks_data = loaded_lm
                 muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
+
+        errors, warnings = _validate_species_data(landmarks_data, muscles_data, context_label=species_name)
+        for w in warnings:
+            self.report({'WARNING'}, w)
+        if errors:
+            for e in errors:
+                self.report({'ERROR'}, e)
+            return {'CANCELLED'}
 
         muscle_count = 0
 
@@ -1413,6 +1585,10 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
         # the skin deformation with the newly generated muscles
         update_flex(None, context)
 
+        # Cache the resolved species name so get_status can read it without
+        # re-parsing the species file on every call (Issue 18).
+        context.scene["_fascia_species_name"] = species_name
+
         self.report({'INFO'}, str(muscle_count) + " muscles generated for " + species_name)
         return {"FINISHED"}
 
@@ -1429,6 +1605,12 @@ class FASCIA_OT_simulate_motion(bpy.types.Operator):
     bl_label = "Simulate Motion"
     bl_description = "Create a 60-frame flex test animation"
     bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
 
     def execute(self, context):
         scene = context.scene
@@ -1455,7 +1637,6 @@ class FASCIA_OT_simulate_motion(bpy.types.Operator):
             scene.frame_set(frame)
             scene.fascia_flex = val
             scene.keyframe_insert(data_path="fascia_flex", frame=frame)
-            update_flex(None, context)
 
         scene.frame_set(1)
 
@@ -1476,6 +1657,12 @@ class FASCIA_OT_bake_flex_pose(bpy.types.Operator):
     bl_description = "Bake the simulated flex animation into reusable shape keys"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
         skin_objects = _get_skin_objects()
 
@@ -1495,7 +1682,6 @@ class FASCIA_OT_bake_flex_pose(bpy.types.Operator):
 
         for frame in frames_to_bake:
             context.scene.frame_set(frame)
-            update_flex(None, context)
             flex_val = context.scene.fascia_flex
 
             for obj in skin_objects:
@@ -1505,9 +1691,10 @@ class FASCIA_OT_bake_flex_pose(bpy.types.Operator):
                 # This MUST happen before we create Basis, because creating Basis
                 # restores mesh.vertices to the original (clean) state — which would
                 # erase the flexed data we need to capture.
+                basis = mesh.shape_keys.key_blocks.get("Basis") if mesh.shape_keys else None
                 if flex_val < 0.001:
-                    source = mesh.vertices
-                elif mesh.shape_keys and "Live_Flex" in mesh.shape_keys.key_blocks:
+                    source = basis.data if basis else mesh.vertices
+                elif basis and "Live_Flex" in mesh.shape_keys.key_blocks:
                     source = mesh.shape_keys.key_blocks["Live_Flex"].data
                 else:
                     source = mesh.vertices
@@ -1555,23 +1742,31 @@ class FASCIA_OT_get_status(bpy.types.Operator):
     bl_description = "Report the current Fascia workflow state — base, species, landmark/muscle counts, rig, flex. LLM-facing; returns no mesh data"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        # Fascia operators require Object Mode — they create, parent, and
+        # deform objects via bpy.ops, which fail in other contexts.
+        return context.mode == 'OBJECT'
+
     def execute(self, context):
         scene = context.scene
         body = _get_base_mesh()
         base_name = body.name if body else "none"
 
         # Resolve the active species name (same priority as operators)
-        species_name = "horse(default)"
-        species_path = scene.fascia_species_path
-        species_json = scene.fascia_species_json
-        if species_path:
-            _lm, _ms, loaded_name = _load_species(species_path)
-            if _lm:
-                species_name = loaded_name or "Unknown"
-        elif species_json:
-            _lm, _ms, loaded_name = _load_species_json(species_json)
-            if _lm:
-                species_name = loaded_name or "Unknown"
+        species_name = context.scene.get("_fascia_species_name", None)
+        if species_name is None:
+            species_name = "horse(default)"
+            species_path = scene.fascia_species_path
+            species_json = scene.fascia_species_json
+            if species_path:
+                _lm, _ms, loaded_name = _load_species(species_path)
+                if _lm:
+                    species_name = loaded_name or "Unknown"
+            elif species_json:
+                _lm, _ms, loaded_name = _load_species_json(species_json)
+                if _lm:
+                    species_name = loaded_name or "Unknown"
 
         lm_count = sum(1 for o in bpy.data.objects if o.get("fascia_type") == "landmark")
         muscle_count = sum(1 for o in bpy.data.objects if o.get("fascia_type") == "muscle")
@@ -1617,7 +1812,16 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
         layout.separator()
         
         # Draw the settings label and sliders
-        layout.label(text="Horse Settings:")
+        # Show loaded species name — not hardcoded "Horse" for non-horse workflows.
+        species_path = scene.fascia_species_path
+        if species_path:
+            species_label = os.path.splitext(
+                os.path.basename(bpy.path.abspath(species_path)))[0]
+        elif scene.fascia_species_json:
+            species_label = "Custom Species"
+        else:
+            species_label = "Horse"
+        layout.label(text=f"{species_label} Settings:")
         
         # Age slider (0.0 to 1.0)
         layout.prop(scene, "fascia_age", text="Age", slider=True)
@@ -1666,6 +1870,9 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
         # Skin sliding toggle (Spec 12). On by default; turn off to
         # compare with radial-only deformation.
         layout.prop(scene, "fascia_skin_sliding")
+
+        # Hard Design Rule 13: never claim FEM parity.
+        layout.label(text="Geometric contraction only (not FEM/physics)", icon='INFO')
 
         # Show how many skin vertices are being affected by the flex
         flex_val = scene.fascia_flex
@@ -1722,6 +1929,7 @@ class FasciaMuscleRecruitment(bpy.types.PropertyGroup):
         default=1.0,
         min=0.0,
         max=2.0,
+        update=update_flex
     )
 
 
@@ -1866,6 +2074,7 @@ def register():
         name="Skin Sliding",
         description="When enabled, skin slides tangentially along contracting muscles (in addition to radial bulging). Disable to compare with radial-only behavior.",
         default=True,
+        update=update_flex,
     )
 
 

@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id            = "fascia"
+version       = "0.1.0"
+name          = "Fascia"
+tagline       = "Creature soft-tissue toolbox — landmarks, muscles, skin binding, flex baking"
+maintainer    = "Fascia contributors"
+type          = "add-on"
+
+blender_version_min = "4.0.0"
+
+license = ["SPDX:MIT"]
+website = "https://github.com/memegod069/Fascia"
+tags    = ["Mesh", "Animation", "Rigging"]
+
+[build]
+paths = ["fascia_addon.py", "species/"]
