@@ -742,6 +742,14 @@ def update_flex(self, context):
             # ── Shape keys exist: Basis is the clean reference ──
             # NEVER write to mesh.vertices (that would corrupt Basis).
             # Read from Basis, write flex to Live_Flex only.
+            #
+            # Issue 11 fix: source_data MUST be the Basis shape key's
+            # vertex data, NOT mesh.vertices. When shape keys exist,
+            # mesh.vertices exposes the evaluated/blended positions
+            # (Basis + active shape key offsets), not the clean Basis.
+            # Reading from mesh.vertices compounds displacement on
+            # every subsequent flex call, causing visible skin drift
+            # and incorrect push directions.
             live_key = mesh.shape_keys.key_blocks.get("Live_Flex")
             if not live_key:
                 live_key = obj.shape_key_add(name="Live_Flex")
@@ -753,7 +761,8 @@ def update_flex(self, context):
 
             live_key.value = 1.0
             target_data = live_key.data
-            source_data = mesh.vertices
+            basis_key = mesh.shape_keys.key_blocks.get("Basis")
+            source_data = basis_key.data if basis_key else mesh.vertices
         else:
             # ── No shape keys yet: use the backup system ──
             # Save original verts (only once), then restore so we
