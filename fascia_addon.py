@@ -372,6 +372,12 @@ MUSCLE_INFLUENCE_FRACTION = 0.083
 # pi * r^2 * L stays constant. Tunable.
 MAX_CONTRACTION = 0.25
 
+# Fraction of the muscle's axial shortening that is transmitted to nearby
+# skin as tangential sliding (Spec 12). 1.0 = full physical sliding (the
+# skin follows the muscle surface exactly). < 1.0 = damped sliding (skin
+# lags behind the muscle). Tunable; do not tune to a specific mesh.
+SKIN_SLIDE_FRACTION = 1.0
+
 HORSE_MUSCLES = {
     # Front body (warm colours)
     "Trapezius":         {"from": "Withers",         "to": "ScapulaTop",      "radius": 0.017, "color": (0.80, 0.20, 0.15, 0.60)},
@@ -631,15 +637,16 @@ def update_flex(self, context):
     # (how thick it is), and its per-muscle thickness scale for the skin
     # push growth calculation (Spec 5).
     muscle_info = []
+    max_half_length = 0.0
     for m in muscles:
         ls_i, ts_i = muscle_scales.get(m.name, (1.0, 1.0))
         rest_length = m.get("fascia_rest_length", None)
         if rest_length is None:
-            # Legacy muscle (generated before attachment pinning): its pivot
-            # is still at the midpoint, so matrix_world.translation IS the
-            # belly center. Keeps pre-regeneration muscles from rendering with
-            # a misplaced bulge; regeneration is still required for pinning.
+            # Legacy muscle (pre-Spec-4): no axis data, no axial slide.
+            # Radial push still works (uses the belly center as before).
             center = m.matrix_world.translation.copy()
+            origin = None
+            axis = None
         else:
             # Pinned muscle: object origin is at the FROM landmark (p1), so
             # matrix_world.translation is the ORIGIN END, not the belly.
@@ -654,15 +661,25 @@ def update_flex(self, context):
             world_rot = m.matrix_world.to_quaternion()
             axis = (world_rot @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
             center = origin + axis * (rest_length * ls_i * 0.5)
+            if rest_length * 0.5 > max_half_length:
+                max_half_length = rest_length * 0.5
         radius = m.get("fascia_radius", 0.04)
-        muscle_info.append((center, radius, ts_i))
+        # Spec 12: store origin/axis/rest_length/ls_i for the axial slide.
+        # Legacy muscles get None for origin/axis, which the slide code guards on.
+        muscle_info.append((center, radius, ts_i, origin, axis, rest_length, ls_i))
 
     # Spec 11: Build KDTree for spatial acceleration
     from mathutils.kdtree import KDTree
     kd = KDTree(len(muscle_info))
-    for idx, (m_center, m_radius, m_ts_i) in enumerate(muscle_info):
-        kd.insert(m_center, idx)
+    for idx, entry in enumerate(muscle_info):
+        kd.insert(entry[0], idx)  # entry[0] = belly center
     kd.balance()
+
+    # Spec 12: Query a larger radius so vertices near the muscle ends (not
+    # just the belly center) are found for the axial slide. The per-component
+    # distance checks inside the loop filter out out-of-range vertices.
+    search_radius = influence_radius + max_half_length
+    skin_sliding = scene.fascia_skin_sliding
 
     for obj in skin_objects:
         mesh = obj.data
@@ -710,16 +727,40 @@ def update_flex(self, context):
             push = mathutils.Vector((0.0, 0.0, 0.0))
             was_affected = False
 
-            for (_idx, dist, _co) in kd.find_range(world_pos, influence_radius):
+            # find_range returns (position, index, distance). Unpack by
+            # position to match the return order, not the variable names.
+            for (_co, idx, dist) in kd.find_range(world_pos, search_radius):
                 if dist < 0.001:
                     continue
-                m_center, m_radius, m_ts_i = muscle_info[_idx]
-                t = dist / influence_radius
-                falloff = (1.0 - t) * (1.0 - t)
-                growth = m_radius * (m_ts_i - 1.0)
-                push_dir = (world_pos - m_center).normalized()
-                push += push_dir * growth * falloff
-                was_affected = True
+                m_center, m_radius, m_ts_i, m_origin, m_axis, m_rest_length, m_ls_i = muscle_info[idx]
+
+                # ── Radial push (Spec 3, unchanged): only if within
+                # influence_radius of the belly center. ──
+                if dist < influence_radius:
+                    t = dist / influence_radius
+                    falloff = (1.0 - t) * (1.0 - t)
+                    growth = m_radius * (m_ts_i - 1.0)
+                    push_dir = (world_pos - m_center).normalized()
+                    push += push_dir * growth * falloff
+                    was_affected = True
+
+                # ── Axial slide (Spec 12): tangential push along the muscle
+                # axis, proportional to the muscle's shortening. Only if skin
+                # sliding is enabled and the muscle has axis data (pinned
+                # muscles, Spec 4+). Legacy muscles get None for origin/axis
+                # and are skipped here. ──
+                if skin_sliding and m_origin is not None and m_axis is not None and m_rest_length and m_rest_length > 0.001:
+                    rel = world_pos - m_origin
+                    s = rel.dot(m_axis)
+                    s_clamped = max(0.0, min(m_rest_length, s))
+                    radial_vec = rel - m_axis * s_clamped
+                    radial_dist = radial_vec.length
+                    if radial_dist < influence_radius and radial_dist > 0.001:
+                        t_axial = radial_dist / influence_radius
+                        falloff_axial = (1.0 - t_axial) * (1.0 - t_axial)
+                        slide = s_clamped * (m_ls_i - 1.0) * SKIN_SLIDE_FRACTION
+                        push += m_axis * slide * falloff_axial
+                        was_affected = True
 
             if was_affected:
                 new_world_pos = world_pos + push
@@ -1559,6 +1600,10 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
         #   c_i = flex * MAX_CONTRACTION * recruitment_i
         layout.prop(scene, "fascia_flex", text="Flex", slider=True)
 
+        # Skin sliding toggle (Spec 12). On by default; turn off to
+        # compare with radial-only deformation.
+        layout.prop(scene, "fascia_skin_sliding")
+
         # Show how many skin vertices are being affected by the flex
         flex_val = scene.fascia_flex
         if flex_val > 0.001:
@@ -1746,12 +1791,24 @@ def register():
         poll=lambda self, obj: obj.type == 'ARMATURE',
     )
 
+    # Skin sliding toggle (Spec 12). When enabled, skin slides tangentially
+    # along contracting muscles in addition to radial bulging.
+    bpy.types.Scene.fascia_skin_sliding = bpy.props.BoolProperty(
+        name="Skin Sliding",
+        description="When enabled, skin slides tangentially along contracting muscles (in addition to radial bulging). Disable to compare with radial-only behavior.",
+        default=True,
+    )
+
 
 def unregister():
     # Remove the CollectionProperty and IntProperty BEFORE unregistering
     # the PropertyGroup type, so there are no dangling type references.
     del bpy.types.Scene.fascia_recruitment_index
     del bpy.types.Scene.fascia_recruitment
+
+    # Skin sliding toggle (Spec 12) — no type dependency, but keep it in
+    # the pre-class block for consistency with other Scene properties.
+    del bpy.types.Scene.fascia_skin_sliding
 
     # Unregister our panel and operator classes (includes
     # FasciaMuscleRecruitment and FASCIA_UL_recruitment via the tuple).
