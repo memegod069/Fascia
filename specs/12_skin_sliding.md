@@ -306,7 +306,7 @@ Report: for the sample muscle at flex=0 and flex=1 — the origin-end axial disp
 
 - **Geometric, not physical.** The slide is a geometric projection of the muscle's shortening onto nearby skin. It is not a physics solve (no friction, no tissue compliance, no contact mechanics). This is the same honest caveat as the contraction itself (Spec 3) — never claim FEM parity.
 
-- **KDTree query radius is wider, so more candidates per vertex.** With `search_radius = influence_radius + max_half_length`, each vertex iterates over more muscle candidates than before. The per-component distance checks skip out-of-range ones, but the iteration cost is higher. On the 748k-vertex test mesh this may be noticeably slower than Spec-11 radial-only. Acceptable for v1 (correctness over speed); revisit if interactive performance is lost.
+- **KDTree query radius is wider, so more candidates per vertex.** With `search_radius = influence_radius + max_half_length`, each vertex iterates over more muscle candidates than before. The per-component distance checks skip out-of-range ones, but the iteration cost is higher. On the 748k-vertex test mesh this may be noticeably slower than Spec-11 radial-only. Acceptable for the current work-in-progress (correctness over speed); revisit if interactive performance is lost.
 
 These are honest scope boundaries, not bugs. Do NOT silently work around them.
 

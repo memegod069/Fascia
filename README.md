@@ -2,7 +2,7 @@
 
 Fascia is an early Blender add-on for creature soft-tissue workflows — the muscle, fascia, fat, and skin layers that sit on top of a rigged mesh.
 
-It is inspired by high-end proprietary tissue systems, but this repository is **not** there yet. The current add-on is a **v0 prototype** that proves a basic tool flow inside Blender. It is not production-quality.
+It is inspired by high-end proprietary tissue systems, but this repository is **not** there yet. The current add-on is a **work in progress** that proves a basic tool flow inside Blender. It is not production-quality.
 
 ## What Fascia Is
 

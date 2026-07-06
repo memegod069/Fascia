@@ -3,7 +3,7 @@
 This file is the project source of truth for future AI coding sessions.
 It is public-safe: no personal names, no private paths, no API keys, no machine-specific details.
 
-**Status: v1 complete.** All 11 specifications implemented and verified. The soft-tissue pipeline is end-to-end: anatomy input → landmarks (mesh-agnostic) → rig binding (bone-parented) → muscles (pinned, volume-preserving) → insertion tracking (Damped Track) → contraction (radial + axial skin slide) → skin deformation (KDTree-accelerated) → simulation → baking. Remaining work is refinements and production hardening (skin relaxation, standing-pose mesh, module split, MCP bridge) — not gaps in the core toolchain.
+**Status: Work in Progress.** All 11 specifications implemented and verified so far. The soft-tissue pipeline is end-to-end: anatomy input → landmarks (mesh-agnostic) → rig binding (bone-parented) → muscles (pinned, volume-preserving) → insertion tracking (Damped Track) → contraction (radial + axial skin slide) → skin deformation (KDTree-accelerated) → simulation → baking. Remaining work is refinements and production hardening (skin relaxation, standing-pose mesh, module split, MCP bridge) — not gaps in the core toolchain.
 
 ---
 
@@ -88,7 +88,7 @@ Fascia's contraction is **geometric and volume-preserving**, not an FEM physics 
 
 ## 4. Current Code State
 
-`fascia_addon.py` is a **working v1** — a single ~1832-line file. All 11 specs have been implemented and verified in Blender on a 748k-vertex horse mesh. The critical "wires" are in place: anatomy input slot (Spec 6), rig binding (Spec 7), muscle insertion tracking (Spec 8), and LLM-facing surface (Spec 9). Tissue-math refinements are complete: antagonist pairing (Spec 10), KDTree spatial acceleration (Spec 11), and skin sliding (Spec 12).
+`fascia_addon.py` is a **work in progress** — a single ~1832-line file. All 11 specs have been implemented and verified in Blender on a 748k-vertex horse mesh. The critical "wires" are in place: anatomy input slot (Spec 6), rig binding (Spec 7), muscle insertion tracking (Spec 8), and LLM-facing surface (Spec 9). Tissue-math refinements are complete: antagonist pairing (Spec 10), KDTree spatial acceleration (Spec 11), and skin sliding (Spec 12).
 
 ### The Nine Tools
 
@@ -209,9 +209,9 @@ Kun's full stack includes `firstmate` — an orchestrator that spawns parallel c
 
 ## 10. Next Sensible Work
 
-**v1 is complete.** All 11 specs are implemented and verified. The chain is fully connected: brain → anatomy → landmarks → rig → muscles → insertion → skin (radial + axial). The remaining work is refinements and production hardening.
+**Work in progress.** All 11 specs so far are implemented and verified. The chain is fully connected: brain → anatomy → landmarks → rig → muscles → insertion → skin (radial + axial). The remaining work is refinements and production hardening — this is not a finished product.
 
-### Post-v1 refinement priorities
+### Refinement priorities
 
 1. **Standing-pose test mesh** for full landmark verification. Closes the only documented tool gap that depends on a new asset rather than code.
 2. **Skin relaxation solver** — Laplacian smoothing or similar to prevent stretching at the insertion end when axial slide is strong. Currently each vertex slides independently (documented limitation in Spec 12 §7).
