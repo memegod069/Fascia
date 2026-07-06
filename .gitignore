@@ -63,3 +63,8 @@ build/
 # Local agent / AI scaffolding files (not for public consumption)
 opencode.json
 captain.md
+memory.md
+issues.md
+testing_issues_log.md
+IMPROVEMENT_PLAN.md
+.agents/
