@@ -33,6 +33,60 @@ import os
 _original_verts = {}
 
 
+# Issue 1 fix: invalidate the vertex cache when the user edits or
+# sculpts a skin mesh, so manual sculpting survives subsequent flex
+# updates. Without this, _original_verts silently holds the
+# pre-sculpt positions and _restore_original_verts writes them back,
+# erasing the user's work the next time Flex moves.
+#
+# A single depsgraph_update_post handler covers both Edit mode and
+# Sculpt/Texture/Vertex/Weight paint modes. Blender fires
+# is_updated_geometry on the active object when entering Edit mode
+# and on every sculpt stroke, with bpy.context.object.mode reporting
+# the current non-OBJECT mode at that moment. Flex updates always
+# run in OBJECT mode, so they never trigger invalidation — no flag
+# or timing guard is needed.
+#
+# (Note: bpy.app.handlers.edit_mode_update does not exist in
+# Blender 5.1, so we rely on depsgraph_update_post alone.)
+
+@bpy.app.handlers.persistent
+def _fascia_invalidate_on_depsgraph(scene, depsgraph):
+    if not _original_verts:
+        return
+    active = bpy.context.object
+    # Skip in OBJECT mode — that is where flex updates run, and they
+    # must not invalidate the cache they just wrote.
+    if active is None or active.mode == 'OBJECT':
+        return
+    # Map mesh NAME → cached object names that use it. Keying by name
+    # (a stable string) instead of by the Mesh datablock reference is
+    # required because update.id inside a depsgraph callback is a
+    # different Python wrapper than bpy.data.objects[*].data and does
+    # not hash-match the persistent reference.
+    cached_mesh_name_to_obj_names = {}
+    for obj in bpy.data.objects:
+        if obj.name in _original_verts and obj.type == 'MESH' and obj.data:
+            cached_mesh_name_to_obj_names.setdefault(obj.data.name, []).append(obj.name)
+    if not cached_mesh_name_to_obj_names:
+        return
+    for update in depsgraph.updates:
+        if not update.is_updated_geometry:
+            continue
+        uid = update.id
+        # update.id may be the Mesh datablock or an Object referencing it.
+        if isinstance(uid, bpy.types.Mesh):
+            mesh_name = uid.name
+        elif isinstance(uid, bpy.types.Object) and uid.type == 'MESH' and uid.data:
+            mesh_name = uid.data.name
+        else:
+            continue
+        names = cached_mesh_name_to_obj_names.get(mesh_name)
+        if names:
+            for name in names:
+                _original_verts.pop(name, None)
+
+
 # ─────────────────────────────────────────────────────────────────
 # HELPERS: Find the base skin mesh(es)
 # ─────────────────────────────────────────────────────────────────
@@ -1698,6 +1752,12 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
+    # Issue 1: register the handler that invalidates the vertex
+    # cache when the user sculpts/edits a skin mesh. Guard against
+    # double-registration on reload.
+    if _fascia_invalidate_on_depsgraph not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_fascia_invalidate_on_depsgraph)
+
     # Register our custom Scene properties so Blender knows they exist
     # These properties store the slider values.
     
@@ -1826,6 +1886,11 @@ def unregister():
 
     # Clear the saved vertex backups
     _original_verts.clear()
+
+    # Issue 1: remove the cache-invalidation handler so a disabled
+    # add-on does not keep reacting to scene edits.
+    if _fascia_invalidate_on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_fascia_invalidate_on_depsgraph)
 
 
 if __name__ == "__main__":
