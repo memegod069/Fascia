@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Fascia",
     "author": "Fascia contributors",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Fascia",
     "description": "Fascia creature soft-tissue toolbox — landmarks, muscles, skin binding, flex baking",
@@ -159,19 +159,16 @@ def _load_species(filepath):
     # bpy.path.abspath handles // correctly; os.path.isfile does not.
     abs_path = bpy.path.abspath(filepath)
     if not os.path.isfile(abs_path):
-        print("Fascia: species file not found: " + abs_path)
         return None, None, None
     filepath = abs_path
 
     try:
         with open(filepath, "r") as f:
             data = json.load(f)
-    except Exception as e:
-        print("Fascia: error reading species file: " + str(e))
+    except Exception:
         return None, None, None
 
     if "landmarks" not in data or "muscles" not in data:
-        print("Fascia: species file missing 'landmarks' or 'muscles' key")
         return None, None, None
 
     return data["landmarks"], data["muscles"], data.get("name", "Unknown")
@@ -192,12 +189,10 @@ def _load_species_json(json_str):
     """
     try:
         data = json.loads(json_str)
-    except Exception as e:
-        print("Fascia: error parsing species JSON string: " + str(e))
+    except Exception:
         return None, None, None
 
     if "landmarks" not in data or "muscles" not in data:
-        print("Fascia: species JSON string missing 'landmarks' or 'muscles' key")
         return None, None, None
 
     return data["landmarks"], data["muscles"], data.get("name", "Unknown")
@@ -1121,12 +1116,16 @@ class FASCIA_OT_place_landmarks(bpy.types.Operator):
                 landmarks_data = loaded_lm
                 muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
+            else:
+                self.report({'WARNING'}, "Fascia: Could not load species file, using built-in horse data")
         elif species_json:
             loaded_lm, loaded_ms, loaded_name = _load_species_json(species_json)
             if loaded_lm:
                 landmarks_data = loaded_lm
                 muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
+            else:
+                self.report({'WARNING'}, "Fascia: Could not parse species JSON, using built-in horse data")
 
         errors, warnings = _validate_species_data(landmarks_data, muscles_data, context_label=species_name)
         for w in warnings:
@@ -1436,12 +1435,16 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                 landmarks_data = loaded_lm
                 muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
+            else:
+                self.report({'WARNING'}, "Fascia: Could not load species file, using built-in horse data")
         elif species_json:
             loaded_lm, loaded_ms, loaded_name = _load_species_json(species_json)
             if loaded_lm and loaded_ms:
                 landmarks_data = loaded_lm
                 muscles_data = loaded_ms
                 species_name = loaded_name or "Unknown"
+            else:
+                self.report({'WARNING'}, "Fascia: Could not parse species JSON, using built-in horse data")
 
         errors, warnings = _validate_species_data(landmarks_data, muscles_data, context_label=species_name)
         for w in warnings:

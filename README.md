@@ -135,6 +135,14 @@ bpy.ops.fascia.bake_flex_pose()
 
 See `docs/llm-integration.md` for the full integration guide and `species/equine_horse.json` for the anatomy JSON schema.
 
+## Testing
+
+- Pure Python smoke tests: `python tests/smoke_test.py`
+- Background Blender smoke: `blender --background --python tests/blender_smoke.py`
+- Full verification (shape keys, flex, rig binding, etc.) must be done manually in the Blender GUI.
+
+Current version: 0.2.0 (see CHANGELOG.md).
+
 ---
 
 ## Species JSON Schema (brief)

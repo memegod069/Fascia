@@ -51,10 +51,14 @@ There is no automated test suite yet. Test manually:
 3. Run each tool in order (Tools 1–7, then Tool 9).
 4. Check the `issues.md` reproduction steps for any issues you are fixing.
 
-A basic smoke-test script is in `tests/smoke_test.py` — it can be run via:
+A basic smoke-test script (pure Python, no Blender required) is in `tests/smoke_test.py`.
+
+A Blender-specific smoke test is in `tests/blender_smoke.py` — run with:
 ```bash
-blender --background --python tests/smoke_test.py
+blender --background --python tests/blender_smoke.py
 ```
+
+For full end-to-end verification (including shape keys, flex, bake, and rig binding), always test manually inside the Blender GUI.
 
 ## Pull Requests
 

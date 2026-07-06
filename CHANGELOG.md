@@ -9,16 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-06
+
 ### Fixed
-- Issue 1: Stale _original_verts cache invalidated via depsgraph handler when user sculpts skin.
-- Issue 11: update_flex reads from Basis shape key, not mesh.vertices, when shape keys exist.
+- Removed bare `print()` calls from species loading helpers (now clean fallbacks with operator warnings).
+- Improved error paths in `_load_species` and `_load_species_json`.
 
 ### Added
-- LICENSE (MIT), expanded .gitignore, CONTRIBUTING.md, CHANGELOG.md
-- .github/ issue templates, PR template, CI lint workflow
-- docs/llm-integration.md, docs/species-schema.md
-- tests/smoke_test.py (pure-function contraction + bbox math tests)
-- blender_manifest.toml (Blender 4.2+ Extensions system)
+- `poll()` methods on all major operators (addresses stability when not in Object Mode).
+- `_validate_species_data()` with proper ERROR/WARNING reporting in operators.
+- `tests/blender_smoke.py` (background Blender smoke test).
+- Moved `IMPROVEMENT_PLAN.md` into `docs/`.
+- Updated CI workflow with better documentation.
+- `bl_info` and manifest bumped to 0.2.0.
+
+### Changed
+- LICENSE (MIT), expanded .gitignore, CONTRIBUTING.md, CHANGELOG.md (from previous scaffolding work).
+- .github/ issue templates, PR template (with shape-key + registration safety checklists), basic CI.
+- docs/llm-integration.md, docs/species-schema.md.
+- tests/smoke_test.py (pure-function tests).
+- blender_manifest.toml.
+- README.md significantly expanded with installation, limitations table, and LLM usage guide.
+
+### Previous
+- Issue 1 and Issue 11 core fixes (see earlier commits).
 
 ---
 

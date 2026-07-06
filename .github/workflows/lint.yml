@@ -1,4 +1,4 @@
-name: Lint
+name: Lint & Smoke
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
     branches: ["main"]
 
 jobs:
-  syntax-check:
-    name: Python syntax check
+  python-checks:
+    name: Python syntax + smoke tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,17 @@ jobs:
           python-version: "3.11"
 
       - name: Syntax check (py_compile)
-        run: python -m py_compile fascia_addon.py && echo "Syntax OK"
+        run: |
+          python -m py_compile fascia_addon.py
+          echo "✅ Syntax OK"
 
-      - name: Pure-function smoke tests
-        run: python tests/smoke_test.py
+      - name: Run pure-function smoke tests
+        run: |
+          python tests/smoke_test.py
+          echo "✅ Smoke tests passed"
+
+  # Note: Full Blender runtime tests (including shape-key safety, operators, flex, bake)
+  # must be run manually in Blender 4.0+.
+  # - Pure Python: python tests/smoke_test.py
+  # - Background Blender: blender --background --python tests/blender_smoke.py
+  # See CONTRIBUTING.md for manual GUI verification steps (the only way to fully test shape keys).

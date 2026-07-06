@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id            = "fascia"
-version       = "0.1.0"
+version       = "0.2.0"
 name          = "Fascia"
 tagline       = "Creature soft-tissue toolbox — landmarks, muscles, skin binding, flex baking"
 maintainer    = "Fascia contributors"

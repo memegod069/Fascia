@@ -87,6 +87,14 @@ Evidence: Spec 9 verification. `bpy.ops.fascia.get_status()` produces `Fascia: b
 
 `KDTree.find_range()` returns `list[tuple(Vector position, int index, float distance)]`, not `list[tuple(int, float, Vector)]`. The original Spec 11 code unpacked as `for (_idx, dist, _co)` which assigned the Vector to `_idx` and the index to `dist`. This caused `muscle_info[_idx]` (where `_idx` is a Vector) to throw a TypeError.
 
+---
+
+## 2026-07-06: Bare print() statements are harmful for user/LLM experience
+
+Bare `print()` calls in operators or helpers pollute the console and are invisible or noisy for users running through the GUI or via MCP/LLM drivers. All user-facing messages must go through `self.report({'INFO'/'WARNING'/'ERROR'})`. This was fixed for species loading by removing prints from `_load_species*` and adding explicit WARNING reports in the calling operators (place_landmarks, generate_muscles).
+
+Evidence: Re-audit after OSS improvements. All `print("Fascia: ...")` removed from fascia_addon.py. Operators now surface fallback behavior clearly.
+
 The bug was latent because `MUSCLE_INFLUENCE_FRACTION = 0.083` produced `influence_radius ≈ 0.3`, and on the 748k-vertex horse mesh, no belly center was within 0.3 units of any skin vertex — so `find_range` returned empty lists and the broken unpack was never exercised.
 
 Spec 12's axial slide required a larger search radius (`influence_radius + max_half_rest_length`), which exposed the bug. Fix: unpack as `for (_co, idx, dist)` and use `idx` as the list index. The distance check `if dist < 0.001` now correctly uses the actual distance (float) instead of the muscle index (int).

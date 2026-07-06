@@ -259,6 +259,16 @@ The following OSS scaffolding was added to raise contributor readiness:
 - Issue 12: `max(flex * MAX_CONTRACTION, 1e-9)` safe floor for antagonist division
 - Issue 14: `NuchalCrest`, `FrontKnee`, `BellyMid` marked RESERVED in both code and JSON
 - Issue 15: Robust color unpack via index access instead of tuple unpack
+
+**Follow-up hygiene pass (this session):**
+- Removed all remaining bare `print("Fascia:...")` statements from species loaders.
+- Added clear `self.report({'WARNING'})` messages when falling back to built-in data.
+- Added `tests/blender_smoke.py`.
+- Moved `IMPROVEMENT_PLAN.md` to `docs/`.
+- Improved CI workflow documentation.
+- Bumped version to 0.2.0 in bl_info + manifest.
+- Updated CHANGELOG, CONTRIBUTING, learnings.md.
+- Verified working tree cleanliness and no print statements remain.
 - Issue 16: Bake reads from Basis shape key, not `mesh.vertices`, at flex=0 frames
 - Issue 17: Dynamic species label in panel from resolved species name
 - Issue 18: `_fascia_species_name` cached in scene after landmarks/muscles placed
