@@ -3,7 +3,7 @@
 This file is the project source of truth for future AI coding sessions.
 It is public-safe: no personal names, no private paths, no API keys, no machine-specific details.
 
-**Status: Work in Progress.** All 11 specifications implemented and verified so far. The soft-tissue pipeline is end-to-end: anatomy input → landmarks (mesh-agnostic) → rig binding (bone-parented) → muscles (pinned, volume-preserving) → insertion tracking (Damped Track) → contraction (radial + axial skin slide) → skin deformation (KDTree-accelerated) → simulation → baking. Remaining work is refinements and production hardening (skin relaxation, standing-pose mesh, module split, MCP bridge) — not gaps in the core toolchain.
+**Status: Plan Created.** All 11 specifications implemented and verified. A comprehensive repository improvement plan (`IMPROVEMENT_PLAN.md`) has been created and committed to guide the next phases of development (OSS scaffolding, error handling, and structural fixes). Initial OSS files (`LICENSE` and `.gitignore`) have been added.
 
 ---
 
