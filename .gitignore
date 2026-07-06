@@ -1,2 +1,65 @@
-test_meshes/
+# Python / Blender
 __pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# Blender temporary files
+*.blend1
+*.blend2
+*.blend3
+*.blend4
+*.blend5
+*.blend6
+*.blend7
+*.blend8
+*.blend9
+*.bphys
+*.cache
+blender_crash.txt
+
+# Blender installed add-on links (development symlinks)
+*.lnk
+
+# Large test / benchmark meshes — use git-lfs or store externally
+test_meshes/
+
+# OS artefacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.suo
+*.sln
+*.user
+.vs/
+
+# Virtual environments (if any Python tooling is added)
+.venv/
+venv/
+env/
+
+# Packaging output
+dist/
+build/
+*.egg-info/
+*.egg
+*.zip
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+
+# Local agent / AI scaffolding files (not for public consumption)
+opencode.json
+captain.md
