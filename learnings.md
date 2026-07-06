@@ -80,3 +80,15 @@ Evidence: Spec 9 verification. File path with horse JSON → 29 landmarks + 29 m
 The status string deliberately omits vertex counts, coordinates, and radii (rule 5). It reports only workflow state: base mesh name, species name, landmark/muscle counts, rig name, flex value.
 
 Evidence: Spec 9 verification. `bpy.ops.fascia.get_status()` produces `Fascia: base=Fascia_Horse_Real, species=horse(default), landmarks=29, muscles=29, rig=TestRig, flex=0.0` via `self.report()`.
+
+---
+
+## 2026-07-06: KDTree.find_range return order — latent Spec 11 bug
+
+`KDTree.find_range()` returns `list[tuple(Vector position, int index, float distance)]`, not `list[tuple(int, float, Vector)]`. The original Spec 11 code unpacked as `for (_idx, dist, _co)` which assigned the Vector to `_idx` and the index to `dist`. This caused `muscle_info[_idx]` (where `_idx` is a Vector) to throw a TypeError.
+
+The bug was latent because `MUSCLE_INFLUENCE_FRACTION = 0.083` produced `influence_radius ≈ 0.3`, and on the 748k-vertex horse mesh, no belly center was within 0.3 units of any skin vertex — so `find_range` returned empty lists and the broken unpack was never exercised.
+
+Spec 12's axial slide required a larger search radius (`influence_radius + max_half_rest_length`), which exposed the bug. Fix: unpack as `for (_co, idx, dist)` and use `idx` as the list index. The distance check `if dist < 0.001` now correctly uses the actual distance (float) instead of the muscle index (int).
+
+Evidence: Spec 12 verification (the first flex=1 call with skin_sliding=True errored with `TypeError: list indices must be integers or slices, not Vector`). After the fix, all 10 verification checks passed and 368k vertices were correctly displaced.

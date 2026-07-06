@@ -1,14 +1,2 @@
-# Python bytecode / cache
+test_meshes/
 __pycache__/
-*.pyc
-
-# OS clutter
-.DS_Store
-Thumbs.db
-
-# Blender backup saves
-*.blend1
-*.blend2
-
-# Local screenshots (not part of the add-on source)
-Screenshot*.png

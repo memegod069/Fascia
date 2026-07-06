@@ -372,26 +372,32 @@ MUSCLE_INFLUENCE_FRACTION = 0.083
 # pi * r^2 * L stays constant. Tunable.
 MAX_CONTRACTION = 0.25
 
+# Fraction of the muscle's axial shortening that is transmitted to nearby
+# skin as tangential sliding (Spec 12). 1.0 = full physical sliding (the
+# skin follows the muscle surface exactly). < 1.0 = damped sliding (skin
+# lags behind the muscle). Tunable; do not tune to a specific mesh.
+SKIN_SLIDE_FRACTION = 1.0
+
 HORSE_MUSCLES = {
     # Front body (warm colours)
     "Trapezius":         {"from": "Withers",         "to": "ScapulaTop",      "radius": 0.017, "color": (0.80, 0.20, 0.15, 0.60)},
-    "Deltoid":           {"from": "ScapulaTop",      "to": "PointOfShoulder", "radius": 0.014, "color": (0.90, 0.35, 0.10, 0.60)},
+    "Deltoid":           {"from": "ScapulaTop",      "to": "PointOfShoulder", "radius": 0.014, "color": (0.90, 0.35, 0.10, 0.60), "antagonist": "Pectorals"},
     "Triceps":           {"from": "ScapulaTop",      "to": "Elbow",           "radius": 0.019, "color": (0.70, 0.12, 0.12, 0.60)},
-    "BicepsBrachii":     {"from": "PointOfShoulder", "to": "Elbow",           "radius": 0.014, "color": (0.85, 0.45, 0.35, 0.60)},
-    "Pectorals":         {"from": "Chest",           "to": "PointOfShoulder", "radius": 0.019, "color": (0.82, 0.30, 0.30, 0.60)},
+    "BicepsBrachii":     {"from": "PointOfShoulder", "to": "Elbow",           "radius": 0.014, "color": (0.85, 0.45, 0.35, 0.60), "antagonist": "Triceps"},
+    "Pectorals":         {"from": "Chest",           "to": "PointOfShoulder", "radius": 0.019, "color": (0.82, 0.30, 0.30, 0.60), "antagonist": "LatissimusDorsi"},
     "SerratusVentralis": {"from": "Chest",           "to": "SerratusAnchor",  "radius": 0.017, "color": (0.78, 0.35, 0.40, 0.60)},
     "LatissimusDorsi":   {"from": "MidBack",         "to": "LatAnchor",       "radius": 0.019, "color": (0.72, 0.22, 0.18, 0.60)},
-    "Brachiocephalicus": {"from": "Poll",            "to": "PointOfShoulder", "radius": 0.014, "color": (0.88, 0.50, 0.30, 0.60)},
+    "Brachiocephalicus": {"from": "Poll",            "to": "PointOfShoulder", "radius": 0.014, "color": (0.88, 0.50, 0.30, 0.60), "antagonist": "SerratusVentralis"},
 
     # Spine & torso
     "LongissimusDorsi":  {"from": "Withers",         "to": "PointOfCroup",    "radius": 0.017, "color": (0.65, 0.18, 0.18, 0.60)},
-    "RectusAbdominis":   {"from": "Chest",           "to": "PointOfHip",      "radius": 0.014, "color": (0.75, 0.55, 0.40, 0.60)},
+    "RectusAbdominis":   {"from": "Chest",           "to": "PointOfHip",      "radius": 0.014, "color": (0.75, 0.55, 0.40, 0.60), "antagonist": "LongissimusDorsi"},
 
     # Rear body (cool colours)
     "GluteusMedius":     {"from": "PointOfHip",      "to": "HipJoint",        "radius": 0.028, "color": (0.20, 0.22, 0.78, 0.60)},
     "BicepsFemoris":     {"from": "PointOfButtock",  "to": "Stifle",          "radius": 0.019, "color": (0.30, 0.30, 0.85, 0.60)},
-    "Semitendinosus":    {"from": "PointOfButtock",  "to": "Hock",            "radius": 0.017, "color": (0.40, 0.38, 0.75, 0.60)},
-    "Quadriceps":        {"from": "HipJoint",        "to": "Stifle",          "radius": 0.019, "color": (0.45, 0.25, 0.70, 0.60)},
+    "Semitendinosus":    {"from": "PointOfButtock",  "to": "Hock",            "radius": 0.017, "color": (0.40, 0.38, 0.75, 0.60), "antagonist": "Quadriceps"},
+    "Quadriceps":        {"from": "HipJoint",        "to": "Stifle",          "radius": 0.019, "color": (0.45, 0.25, 0.70, 0.60), "antagonist": "BicepsFemoris"},
     "Gastrocnemius":     {"from": "Stifle",          "to": "Hock",            "radius": 0.014, "color": (0.55, 0.42, 0.78, 0.60)},
 }
 
@@ -540,9 +546,54 @@ def update_flex(self, context):
     # length_scale_i and thickness_scale_i based on its recruitment.
     muscle_scales = {}  # name -> (length_scale_i, thickness_scale_i)
 
+    # Spec 10: Antagonist relaxation
+    # Build a map: muscle_name -> list of muscles that name it as antagonist
+    # (the "aggressors"). When an aggressor contracts, the named antagonist
+    # gets its contraction reduced proportionally.
+    antagonist_map = {}
+    for obj in muscles:
+        ant = obj.get("fascia_antagonist", "")
+        if ant:
+            # Side suffix resolution: left muscle relaxes left antagonist, etc.
+            side_suffix = ""
+            if obj.name.endswith("_L"):
+                side_suffix = "_L"
+            elif obj.name.endswith("_R"):
+                side_suffix = "_R"
+
+            if side_suffix:
+                # First try matching with the same side suffix (e.g. Triceps_L)
+                ant_objs = [m for m in muscles if (ant + side_suffix) in m.name]
+                if not ant_objs:
+                    # Fallback to general substring match
+                    ant_objs = [m for m in muscles if ant in m.name]
+            else:
+                ant_objs = [m for m in muscles if ant in m.name]
+
+            for ant_obj in ant_objs:
+                antagonist_map.setdefault(ant_obj.name, []).append(obj)
+
+    # Compute the relaxation fraction for each muscle that is named
+    # as an antagonist. The relaxation is the maximum contraction
+    # of all aggressors that name this muscle, normalised so that
+    # full antagonist contraction = full relaxation (c_B * 0.0).
+    # Saturated at 1.0 so relaxation never exceeds the muscle's
+    # own contraction.
+    max_c_total = flex * MAX_CONTRACTION if flex > 0.001 else 1.0
+    relaxation_map = {}
+    for m_name, aggressors in antagonist_map.items():
+        max_relax = 0.0
+        for ag in aggressors:
+            c_ag = flex * MAX_CONTRACTION * recruitment_map.get(ag.name, 1.0)
+            max_relax = max(max_relax, min(1.0, c_ag / max_c_total))
+        relaxation_map[m_name] = max_relax
+
     for obj in muscles:
         r_i = recruitment_map.get(obj.name, 1.0)
         c_i = flex * MAX_CONTRACTION * r_i
+        # Spec 10: apply antagonist relaxation
+        relax = relaxation_map.get(obj.name, 0.0)
+        c_i = c_i * (1.0 - relax)
         ls_i = 1.0 - c_i
         ts_i = 1.0 / (ls_i ** 0.5) if ls_i > 0.01 else 1.0
         obj.scale[0] = ts_i  # local X = thickness (bulge)
@@ -586,15 +637,16 @@ def update_flex(self, context):
     # (how thick it is), and its per-muscle thickness scale for the skin
     # push growth calculation (Spec 5).
     muscle_info = []
+    max_half_length = 0.0
     for m in muscles:
         ls_i, ts_i = muscle_scales.get(m.name, (1.0, 1.0))
         rest_length = m.get("fascia_rest_length", None)
         if rest_length is None:
-            # Legacy muscle (generated before attachment pinning): its pivot
-            # is still at the midpoint, so matrix_world.translation IS the
-            # belly center. Keeps pre-regeneration muscles from rendering with
-            # a misplaced bulge; regeneration is still required for pinning.
+            # Legacy muscle (pre-Spec-4): no axis data, no axial slide.
+            # Radial push still works (uses the belly center as before).
             center = m.matrix_world.translation.copy()
+            origin = None
+            axis = None
         else:
             # Pinned muscle: object origin is at the FROM landmark (p1), so
             # matrix_world.translation is the ORIGIN END, not the belly.
@@ -609,15 +661,25 @@ def update_flex(self, context):
             world_rot = m.matrix_world.to_quaternion()
             axis = (world_rot @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
             center = origin + axis * (rest_length * ls_i * 0.5)
+            if rest_length * 0.5 > max_half_length:
+                max_half_length = rest_length * 0.5
         radius = m.get("fascia_radius", 0.04)
-        muscle_info.append((center, radius, ts_i))
+        # Spec 12: store origin/axis/rest_length/ls_i for the axial slide.
+        # Legacy muscles get None for origin/axis, which the slide code guards on.
+        muscle_info.append((center, radius, ts_i, origin, axis, rest_length, ls_i))
 
     # Spec 11: Build KDTree for spatial acceleration
     from mathutils.kdtree import KDTree
     kd = KDTree(len(muscle_info))
-    for idx, (m_center, m_radius, m_ts_i) in enumerate(muscle_info):
-        kd.insert(m_center, idx)
+    for idx, entry in enumerate(muscle_info):
+        kd.insert(entry[0], idx)  # entry[0] = belly center
     kd.balance()
+
+    # Spec 12: Query a larger radius so vertices near the muscle ends (not
+    # just the belly center) are found for the axial slide. The per-component
+    # distance checks inside the loop filter out out-of-range vertices.
+    search_radius = influence_radius + max_half_length
+    skin_sliding = scene.fascia_skin_sliding
 
     for obj in skin_objects:
         mesh = obj.data
@@ -665,16 +727,40 @@ def update_flex(self, context):
             push = mathutils.Vector((0.0, 0.0, 0.0))
             was_affected = False
 
-            for (_idx, dist, _co) in kd.find_range(world_pos, influence_radius):
+            # find_range returns (position, index, distance). Unpack by
+            # position to match the return order, not the variable names.
+            for (_co, idx, dist) in kd.find_range(world_pos, search_radius):
                 if dist < 0.001:
                     continue
-                m_center, m_radius, m_ts_i = muscle_info[_idx]
-                t = dist / influence_radius
-                falloff = (1.0 - t) * (1.0 - t)
-                growth = m_radius * (m_ts_i - 1.0)
-                push_dir = (world_pos - m_center).normalized()
-                push += push_dir * growth * falloff
-                was_affected = True
+                m_center, m_radius, m_ts_i, m_origin, m_axis, m_rest_length, m_ls_i = muscle_info[idx]
+
+                # ── Radial push (Spec 3, unchanged): only if within
+                # influence_radius of the belly center. ──
+                if dist < influence_radius:
+                    t = dist / influence_radius
+                    falloff = (1.0 - t) * (1.0 - t)
+                    growth = m_radius * (m_ts_i - 1.0)
+                    push_dir = (world_pos - m_center).normalized()
+                    push += push_dir * growth * falloff
+                    was_affected = True
+
+                # ── Axial slide (Spec 12): tangential push along the muscle
+                # axis, proportional to the muscle's shortening. Only if skin
+                # sliding is enabled and the muscle has axis data (pinned
+                # muscles, Spec 4+). Legacy muscles get None for origin/axis
+                # and are skipped here. ──
+                if skin_sliding and m_origin is not None and m_axis is not None and m_rest_length and m_rest_length > 0.001:
+                    rel = world_pos - m_origin
+                    s = rel.dot(m_axis)
+                    s_clamped = max(0.0, min(m_rest_length, s))
+                    radial_vec = rel - m_axis * s_clamped
+                    radial_dist = radial_vec.length
+                    if radial_dist < influence_radius and radial_dist > 0.001:
+                        t_axial = radial_dist / influence_radius
+                        falloff_axial = (1.0 - t_axial) * (1.0 - t_axial)
+                        slide = s_clamped * (m_ls_i - 1.0) * SKIN_SLIDE_FRACTION
+                        push += m_axis * slide * falloff_axial
+                        was_affected = True
 
             if was_affected:
                 new_world_pos = world_pos + push
@@ -1189,6 +1275,13 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                     obj["fascia_radius"] = mdata["radius"] * base_size
                     obj["fascia_rest_length"] = (p2 - p1).length
 
+                    # Spec 10: Antagonist pairing — store the
+                    # antagonist muscle name so update_flex can
+                    # auto-relax this muscle when its antagonist
+                    # contracts.
+                    if "antagonist" in mdata:
+                        obj["fascia_antagonist"] = mdata["antagonist"]
+
                     # Spec 7: parent muscle to its origin landmark so it
                     # follows the landmark (which follows the rig bone).
                     # keep_transform=True preserves the just-set world transform.
@@ -1230,6 +1323,10 @@ class FASCIA_OT_generate_muscles(bpy.types.Operator):
                 obj["fascia_insertion"] = "Fascia_LM_" + to_key
                 obj["fascia_radius"] = mdata["radius"] * base_size
                 obj["fascia_rest_length"] = (p2 - p1).length
+
+                # Spec 10: Antagonist pairing.
+                if "antagonist" in mdata:
+                    obj["fascia_antagonist"] = mdata["antagonist"]
 
                 # Spec 7: parent muscle to its origin landmark.
                 _object_parent_object(obj, from_obj)
@@ -1503,6 +1600,10 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
         #   c_i = flex * MAX_CONTRACTION * recruitment_i
         layout.prop(scene, "fascia_flex", text="Flex", slider=True)
 
+        # Skin sliding toggle (Spec 12). On by default; turn off to
+        # compare with radial-only deformation.
+        layout.prop(scene, "fascia_skin_sliding")
+
         # Show how many skin vertices are being affected by the flex
         flex_val = scene.fascia_flex
         if flex_val > 0.001:
@@ -1545,7 +1646,7 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
 #   c_i = flex * MAX_CONTRACTION * recruitment_i
 # This lets the user make individual muscles contract harder, softer,
 # or not at all, while the global Flex slider stays the master drive.
-# Antagonist pairing (auto-relax reciprocal muscles) is future work.
+# Antagonist pairing (auto-relax reciprocal muscles) is supported (Spec 10).
 
 class FasciaMuscleRecruitment(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(
@@ -1690,12 +1791,24 @@ def register():
         poll=lambda self, obj: obj.type == 'ARMATURE',
     )
 
+    # Skin sliding toggle (Spec 12). When enabled, skin slides tangentially
+    # along contracting muscles in addition to radial bulging.
+    bpy.types.Scene.fascia_skin_sliding = bpy.props.BoolProperty(
+        name="Skin Sliding",
+        description="When enabled, skin slides tangentially along contracting muscles (in addition to radial bulging). Disable to compare with radial-only behavior.",
+        default=True,
+    )
+
 
 def unregister():
     # Remove the CollectionProperty and IntProperty BEFORE unregistering
     # the PropertyGroup type, so there are no dangling type references.
     del bpy.types.Scene.fascia_recruitment_index
     del bpy.types.Scene.fascia_recruitment
+
+    # Skin sliding toggle (Spec 12) — no type dependency, but keep it in
+    # the pre-class block for consistency with other Scene properties.
+    del bpy.types.Scene.fascia_skin_sliding
 
     # Unregister our panel and operator classes (includes
     # FasciaMuscleRecruitment and FASCIA_UL_recruitment via the tuple).
