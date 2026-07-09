@@ -76,4 +76,11 @@ else:
     bpy.context.scene.frame_end = len(files)
     bpy.context.scene.frame_set(1)
     
+    # Define and show popup dialog for direct user feedback in the UI
+    message_text = f"Import Successful! Loaded {len(files)} frames into 'Biceps_Simulated'."
+    def draw_popup(self, context):
+        self.layout.label(text=message_text)
+        self.layout.label(text="Please: 1. Switch to Object Mode. 2. Hide other objects. 3. Press Play.")
+
+    bpy.context.window_manager.popup_menu(draw_popup, title="Fascia Importer", icon='CHECKMARK')
     print("OBJ sequence successfully imported and animated!")

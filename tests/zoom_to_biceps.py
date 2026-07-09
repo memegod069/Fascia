@@ -24,4 +24,10 @@ else:
                     with bpy.context.temp_override(area=area, region=region, active_object=biceps, selected_objects=[biceps]):
                         bpy.ops.view3d.view_selected()
                         
+    # Show popup in the viewport
+    def draw_popup(self, context):
+        self.layout.label(text="Viewport Centered! Focused on 'Biceps_Simulated'.")
+        self.layout.label(text="Other helper shapes have been hidden. Press Play (Spacebar) to watch the bend.")
+
+    bpy.context.window_manager.popup_menu(draw_popup, title="Fascia Viewport Focus", icon='ZOOM_IN')
     print("Viewport successfully zoomed and focused on the Biceps simulation!")
