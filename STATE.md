@@ -6,14 +6,13 @@ M1 — Solver Core (multi-object, rig-driven, repeatable)
 See docs/MILESTONES.md → M1 for the full acceptance test.
 
 ## Last Session Summary
-- **M0 Completed successfully:** Wrote `m0_muscle_sim.py` implementing a 3D tetrahedral fusiform muscle simulation in `warp.fem` using a Stable Neo-Hookean material model, active fiber contraction, and fixed boundary conditions at both ends.
-- **Key findings logged:**
-  - `warp.sim` has been deprecated/removed in Warp 1.10+. Successfully used `warp.fem` for the elasticity solve.
-  - Warp's examples run in blocking GUI mode by default unless the `--headless` flag is passed. Headless CPU simulation runs stably.
-  - Replaced Python bitwise OR `|` with logical `or` inside Warp's `@fem.integrand` kernels to fix compilation errors.
-  - Replaced Unicode emojis in prints to avoid Windows terminal character encoding crashes (`UnicodeEncodeError`).
-  - Tuned parameters: Used $\mu = 34.01$ and $\lambda = 532.89$ (representing Poisson's ratio $\nu = 0.47$) to achieve near-incompressibility.
-  - **Verification:** The muscle successfully contracted by 15% under active fiber tension (50.0 max active stress) and bulged emergent from the volume preservation. Max volume drift across the 100-frame animation was 1.10% (well below the 2% milestone requirement). The sequence of 100 OBJ frames was written to `m0_output/`.
+- **M0 Completed successfully:** Wrote `m0_muscle_sim.py` implementing a standalone 3D tetrahedral fusiform muscle simulation using `warp.fem`.
+- **Key findings and verification:**
+  - **Emergent Shortening:** Pinned only the origin end ($X < 0.05$) in place, leaving the insertion end free. The shortening emerged solely from active fiber tension, contracting by **15.67%** at full activation ($a=1.0$), meeting the $> 15\%$ milestone criteria.
+  - **Volume Conservation:** Increased bulk modulus to $\lambda = 1500.0$ and enabled **warm-starting** (keeping previous frame's solved displacement as the initial guess) to allow the Newton solver to converge to high precision. This successfully restricted the maximum volume drift to only **0.46%** (well below the $2.0\%$ limit).
+  - **Warp Compatibility:** Resolved `warp.sim` deprecation by building a displacement-based FEM solver in `warp.fem`. Resolved compiler issues by replacing bitwise operators with logical `or` inside integrands.
+  - **Windows Compatibility:** Swapped emoji characters in print statements to ASCII to prevent `UnicodeEncodeError` crashes on non-UTF-8 console environments.
+  - **Output:** Stored the 100-frame OBJ mesh sequence inside the ignored `m0_output/` folder.
 
 ## Known Issues / Open Questions
 - warp.sim does not exist in warp-lang 1.15.0 (deprecated/removed).

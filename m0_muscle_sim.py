@@ -107,10 +107,9 @@ def muscle_boundary_projector(
     u: fem.Field,
     v: fem.Field,
 ):
-    """Binds boundary conditions to the ends of the muscle (X < 0.05 and X > 0.95)."""
+    """Binds boundary conditions to the origin of the muscle (X < 0.05)."""
     x = domain(s)
-    # We fix the origin-end (x[0] < 0.05) and insertion-end (x[0] > 0.95)
-    weight = wp.where((x[0] < 0.05) or (x[0] > 0.95), 1.0, 0.0)
+    weight = wp.where(x[0] < 0.05, 1.0, 0.0)
     return weight * wp.dot(u(s), v(s))
 
 
@@ -119,16 +118,11 @@ def muscle_boundary_displacement(
     s: fem.Sample,
     domain: fem.Domain,
     v: fem.Field,
-    disp_x: float,
-    disp_y: float,
-    disp_z: float,
 ):
-    """Sets target displacements for the boundary vertices."""
+    """Sets zero displacement for the fixed origin boundary vertices."""
     x = domain(s)
-    # Origin remains at (0, 0, 0), insertion is shifted by (disp_x, disp_y, disp_z)
-    target = wp.where(x[0] > 0.95, wp.vec3(disp_x, disp_y, disp_z), wp.vec3(0.0, 0.0, 0.0))
-    weight = wp.where((x[0] < 0.05) or (x[0] > 0.95), 1.0, 0.0)
-    return weight * wp.dot(target, v(s))
+    weight = wp.where(x[0] < 0.05, 1.0, 0.0)
+    return weight * wp.dot(wp.vec3(0.0, 0.0, 0.0), v(s))
 
 # -------------------------------------------------------------------------
 # Mesh Generation and Helpers
@@ -213,10 +207,9 @@ def run_simulation():
     os.makedirs("m0_output", exist_ok=True)
     
     # Material properties
-    # E = 100.0, nu = 0.47 for better incompressibility
     mu = 34.01
-    lam = 532.89
-    sigma_max = 50.0  # Max active stress
+    lam = 1500.0
+    sigma_max = 24.0  # Max active stress
     
     # Muscle dimensions
     L = 1.0
@@ -250,6 +243,13 @@ def run_simulation():
     )
     fem.normalize_dirichlet_projector(u_bd_matrix)
     
+    u_bd_rhs = fem.integrate(
+        muscle_boundary_displacement,
+        fields={"v": u_bd_test},
+        assembly="nodal",
+        output_dtype=wp.vec3,
+    )
+    
     u_test = fem.make_test(space=u_space, domain=domain)
     u_trial = fem.make_trial(space=u_space, domain=domain)
     
@@ -265,21 +265,11 @@ def run_simulation():
         a = frame / float(num_frames)
         sigma_active = a * sigma_max
         
-        # Insertion target displacement: shortens along X by 15%
-        disp_x = -0.15 * a * L
+        # The insertion end is free; boundary RHS is constant zero (pre-integrated)
         
-        # Integrate boundary RHS for current frame
-        u_bd_rhs = fem.integrate(
-            muscle_boundary_displacement,
-            fields={"v": u_bd_test},
-            values={"disp_x": disp_x, "disp_y": 0.0, "disp_z": 0.0},
-            assembly="nodal",
-            output_dtype=wp.vec3,
-        )
-        
-        # We solve the static equilibrium from scratch at each frame.
-        # This keeps the implementation robust, stable, and simple.
-        u_field.dof_values.zero_()
+        # We solve the static equilibrium warm-started from the previous frame.
+        # This allows the Newton solver to converge much more precisely.
+        # u_field.dof_values.zero_()
         
         # Newton-Raphson solver
         num_newton_iters = 5
@@ -325,22 +315,36 @@ def run_simulation():
         volumes.append(current_volume)
         vol_drift = abs(current_volume - initial_volume) / initial_volume * 100.0
         
+        # Compute actual shortening at insertion end (emergence check)
+        pos_np = positions.numpy()
+        insertion_indices = np.where(pos_np[:, 0] > 0.95)[0]
+        actual_disp_x = np.mean(deformed_pos_np[insertion_indices, 0] - pos_np[insertion_indices, 0])
+        shortening_percent = -actual_disp_x * 100.0 / L
+        
         # Save frame as OBJ
         obj_path = os.path.join("m0_output", f"muscle_{frame:03d}.obj")
         save_obj(obj_path, deformed_pos_np, boundary_faces)
         
         # Print progress
         if frame % 10 == 0 or frame == num_frames:
-            print(f"Frame {frame:03d} | Activation a = {a:.2f} | Disp X = {disp_x:.3f} | Vol = {current_volume:.6f} | Drift = {vol_drift:.2f}%")
+            print(f"Frame {frame:03d} | Activation a = {a:.2f} | Shortening = {shortening_percent:.2f}% | Vol = {current_volume:.6f} | Drift = {vol_drift:.2f}%")
             
     # Print summary metrics
     max_drift = max(abs(v - initial_volume) / initial_volume * 100.0 for v in volumes)
     print("\n--- Simulation Complete ---")
     print(f"Max Volume Drift across animation: {max_drift:.2f}%")
-    if max_drift < 2.0:
-        print("[PASS] Volume drift acceptance test (< 2.0%)")
+    print(f"Final Shortening at a=1.0: {shortening_percent:.2f}%")
+    
+    drift_ok = max_drift < 2.0
+    shortening_ok = shortening_percent >= 15.0
+    
+    if drift_ok and shortening_ok:
+        print("[PASS] Milestone M0 acceptance tests passed!")
     else:
-        print("[FAIL] Volume drift acceptance test (>= 2.0%)")
+        if not drift_ok:
+            print("[FAIL] Volume drift too high (>= 2.0%)")
+        if not shortening_ok:
+            print("[FAIL] Muscle did not shorten by at least 15%")
 
 if __name__ == "__main__":
     with wp.ScopedDevice("cpu"):
