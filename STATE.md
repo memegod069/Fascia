@@ -2,25 +2,25 @@
 (Every session reads this first, and updates it before finishing.)
 
 ## Current Milestone
-M1 — Solver Core (multi-object, rig-driven, repeatable)
-See docs/MILESTONES.md → M1 for the full acceptance test.
+M2 — Anatomy Pipeline (Blender integration begins)
+See docs/MILESTONES.md → M2 for the full acceptance test.
 
 ## Last Session Summary
-- **M0 Completed successfully:** Wrote `m0_muscle_sim.py` implementing a standalone 3D tetrahedral fusiform muscle simulation using `warp.fem`.
+- **M1 Completed successfully:** Generalized the standalone solver into a reusable rig-driven solver (`m1_solver.py`).
 - **Key findings and verification:**
-  - **Emergent Shortening:** Pinned only the origin end ($X < 0.05$) in place, leaving the insertion end free. The shortening emerged solely from active fiber tension, contracting by **15.67%** at full activation ($a=1.0$), meeting the $> 15\%$ milestone criteria.
-  - **Volume Conservation:** Increased bulk modulus to $\lambda = 1500.0$ and enabled **warm-starting** (keeping previous frame's solved displacement as the initial guess) to allow the Newton solver to converge to high precision. This successfully restricted the maximum volume drift to only **0.46%** (well below the $2.0\%$ limit).
-  - **Warp Compatibility:** Resolved `warp.sim` deprecation by building a displacement-based FEM solver in `warp.fem`. Resolved compiler issues by replacing bitwise operators with logical `or` inside integrands.
-  - **Windows Compatibility:** Swapped emoji characters in print statements to ASCII to prevent `UnicodeEncodeError` crashes on non-UTF-8 console environments.
-  - **Output:** Stored the 100-frame OBJ mesh sequence inside the ignored `m0_output/` folder.
+  - **Generalized Rig Binding:** Handled Dirichlet boundary conditions dynamically by setting vertex target positions from bone transforms ($T_{\text{rel}} = T_{\text{pose}} \cdot T_{\text{bind}}^{-1}$) using Warp's `.trace()` method to project cell fields onto boundary integration domains.
+  - **Multi-Object support:** Simulated active Muscle A and passive Muscle B simultaneously, verifying correct passive deformation and active fiber contraction in a single system.
+  - **Volume Conservation:** Kept volume drift extremely low (under **0.06%** for active muscle, **0.00%** for passive muscle), well below the 2.0% acceptance limit.
+  - **Repeatability:** Built a golden-file test (`tests/test_m1.py` + `tests/golden_m1.json`) verifying node coordinates over 10 frames within $10^{-4}$ tolerance.
+  - **Performance:** Recorded solve speed of **~6.9s per muscle per frame** on a CPU-only Dell Latitude.
+- **M0 Completed successfully:** Standalone 3D fusiform muscle simulated using `warp.fem`. Contraction of **15.67%** at full activation ($a=1.0$), volume drift of **0.46%**.
 
 ## Known Issues / Open Questions
-- warp.sim does not exist in warp-lang 1.15.0 (deprecated/removed).
-  Using warp.fem instead for the elasticity solve. Verified this is fully viable for M0's fiber-activation term.
+- warp.sim does not exist in warp-lang 1.15.0 (deprecated/removed); using warp.fem instead.
 
 ## Exact Next Step
-- Start M1 (Solver Core): Generalize the standalone script to support multiple muscles/objects defined via a `scene.json` file.
-- Export a simple 2-3 bone skeleton animation from Blender to drive boundary conditions on attached vertices.
+- Start M2 (Anatomy Pipeline): Write an exporter in the Blender add-on (`fascia_addon.py`) to output `scene.json` and bone animations in the format expected by the M1 solver.
+- Implement heat/geodesic flow solver to auto-generate per-tetrahedron fiber fields from landmark attachments.
 
 ## Environment
 - Machine: Dell Latitude 7300, 16GB RAM, Intel UHD 620 (no NVIDIA GPU)

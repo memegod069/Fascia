@@ -71,3 +71,6 @@ IMPROVEMENT_PLAN.md
 
 # Simulation outputs
 m0_output/
+m1_output/
+m1_test_output/
+meshes/
