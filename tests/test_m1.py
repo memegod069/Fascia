@@ -11,8 +11,8 @@ import warp as wp
 def run_test():
     golden_path = os.path.join(os.path.dirname(__file__), "golden_m1.json")
     
-    # We will simulate 10 frames for the test to keep it fast
-    num_test_frames = 10
+    # We will simulate 101 frames (frames 0 to 100) for the full M1 test
+    num_test_frames = 101
     
     print(f"Running M1 solver for {num_test_frames} frames...")
     

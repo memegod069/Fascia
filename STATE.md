@@ -10,8 +10,8 @@ See docs/MILESTONES.md → M2 for the full acceptance test.
 - **Key findings and verification:**
   - **Generalized Rig Binding:** Handled Dirichlet boundary conditions dynamically by setting vertex target positions from bone transforms ($T_{\text{rel}} = T_{\text{pose}} \cdot T_{\text{bind}}^{-1}$) using Warp's `.trace()` method to project cell fields onto boundary integration domains.
   - **Multi-Object support:** Simulated active Muscle A and passive Muscle B simultaneously, verifying correct passive deformation and active fiber contraction in a single system.
-  - **Volume Conservation:** Kept volume drift extremely low (under **0.06%** for active muscle, **0.00%** for passive muscle), well below the 2.0% acceptance limit.
-  - **Repeatability:** Built a golden-file test (`tests/test_m1.py` + `tests/golden_m1.json`) verifying node coordinates over 10 frames within $10^{-4}$ tolerance.
+  - **Volume Conservation:** Kept volume drift extremely low (max drift of **0.09%** for active Muscle A at full activation, **0.02%** for passive Muscle B) across all 100 frames, well below the 2.0% acceptance limit.
+  - **Repeatability:** Built a complete 101-frame golden-file test (`tests/test_m1.py` + `tests/golden_m1.json`) verifying node coordinates over all frames within $10^{-4}$ tolerance.
   - **Performance:** Recorded solve speed of **~6.9s per muscle per frame** on a CPU-only Dell Latitude.
 - **M0 Completed successfully:** Standalone 3D fusiform muscle simulated using `warp.fem`. Contraction of **15.67%** at full activation ($a=1.0$), volume drift of **0.46%**.
 
