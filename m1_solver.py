@@ -267,7 +267,7 @@ class DeformableObject:
         self.initial_volume = compute_volume(self.rest_positions_np, self.tets_np)
         print(f"  Initial volume: {self.initial_volume:.6f}")
         
-    def solve_frame(self, frame_bones, activation, bone_configs):
+    def solve_frame(self, frame_bones, activation, bone_configs, num_newton_iters=5):
         # Update pin displacement field for this frame
         pin_disp = np.zeros((self.num_vertices, 3), dtype=np.float32)
         
@@ -297,8 +297,8 @@ class DeformableObject:
         
         sigma_active = activation * self.sigma_max
         
-        # Newton-Raphson solver
-        num_newton_iters = 5
+        # Newton-Raphson solver. Default 5 matches M0; M2 dual-pin cases may
+        # need more (pass via run_solver(..., num_newton_iters=N)).
         for newton_iter in range(num_newton_iters):
             # Tangent stiffness matrix K (Hessian)
             u_matrix = fem.integrate(
@@ -351,7 +351,13 @@ class DeformableObject:
         return deformed_pos
 
 
-def run_solver(scene_json_path="scene.json", animation_json_path="animation.json", output_dir="m1_output", limit_frames=None):
+def run_solver(
+    scene_json_path="scene.json",
+    animation_json_path="animation.json",
+    output_dir="m1_output",
+    limit_frames=None,
+    num_newton_iters=5,
+):
     # Load scene setup
     print(f"Loading scene configuration from {scene_json_path}...")
     with open(scene_json_path, "r") as f:
@@ -379,9 +385,14 @@ def run_solver(scene_json_path="scene.json", animation_json_path="animation.json
     for obj in objects:
         os.makedirs(os.path.join(output_dir, obj.name), exist_ok=True)
         
-    print(f"\nStarting simulation loop over {len(frames)} frames...", flush=True)
+    print(
+        f"\nStarting simulation loop over {len(frames)} frames "
+        f"(num_newton_iters={num_newton_iters})...",
+        flush=True,
+    )
     
     results = {obj.name: [] for obj in objects}
+    metrics = []  # per-frame drift records for the first (or only) object
     
     for f_idx, frame_data in enumerate(frames):
         frame_num = frame_data["frame"]
@@ -394,23 +405,77 @@ def run_solver(scene_json_path="scene.json", animation_json_path="animation.json
             activation = activations.get(obj.name, 0.0)
             
             # Solve the frame warm-started from the previous frame's displacement
-            deformed_pos = obj.solve_frame(frame_bones, activation, bone_configs)
+            deformed_pos = obj.solve_frame(
+                frame_bones, activation, bone_configs, num_newton_iters=num_newton_iters
+            )
             results[obj.name].append(deformed_pos.tolist())
             
             # Calculate metrics
             current_volume = compute_volume(deformed_pos, obj.tets_np)
             vol_drift = abs(current_volume - obj.initial_volume) / obj.initial_volume * 100.0
+            metrics.append({
+                "frame": int(frame_num),
+                "object": obj.name,
+                "activation": float(activation),
+                "volume": float(current_volume),
+                "initial_volume": float(obj.initial_volume),
+                "drift_pct": float(vol_drift),
+            })
             
             # Export to OBJ
             obj_path = os.path.join(output_dir, obj.name, f"{obj.name}_{frame_num:03d}.obj")
             save_obj(obj_path, deformed_pos, obj.boundary_faces)
             
-            print(f"  Object: {obj.name:12s} | Activation: {activation:.2f} | Volume: {current_volume:.6f} | Drift: {vol_drift:.2f}%", flush=True)
+            print(
+                f"  Object: {obj.name:12s} | Activation: {activation:.2f} | "
+                f"Volume: {current_volume:.6f} | Drift: {vol_drift:.2f}% | "
+                f"Newton: {num_newton_iters}",
+                flush=True,
+            )
             
     print("\nSimulation completed successfully!", flush=True)
-    return results
+    return results, metrics
 
 
 if __name__ == "__main__":
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(description="Fascia M1/M2 FEM solver")
+    parser.add_argument("--scene", default="scene.json")
+    parser.add_argument("--animation", default="animation.json")
+    parser.add_argument("--output", default="m1_output")
+    parser.add_argument("--limit-frames", type=int, default=None)
+    parser.add_argument(
+        "--newton-iters",
+        type=int,
+        default=5,
+        help="Newton-Raphson iterations per frame (default 5; try 10/15 for hard dual-pin M2 cases)",
+    )
+    args = parser.parse_args()
+
     with wp.ScopedDevice("cpu"):
-        run_solver()
+        t0 = time.perf_counter()
+        _results, metrics = run_solver(
+            scene_json_path=args.scene,
+            animation_json_path=args.animation,
+            output_dir=args.output,
+            limit_frames=args.limit_frames,
+            num_newton_iters=args.newton_iters,
+        )
+        elapsed = time.perf_counter() - t0
+
+    metrics_path = os.path.join(args.output, "drift_metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump(
+            {
+                "num_newton_iters": args.newton_iters,
+                "elapsed_sec": elapsed,
+                "peak_drift_pct": max((m["drift_pct"] for m in metrics), default=0.0),
+                "frames": metrics,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Elapsed wall time: {elapsed:.1f}s ({elapsed/60.0:.2f} min)", flush=True)
+    print(f"Wrote metrics to {metrics_path}", flush=True)

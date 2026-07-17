@@ -17,11 +17,11 @@ def run_test():
     print(f"Running M1 solver for {num_test_frames} frames...")
     
     with wp.ScopedDevice("cpu"):
-        results = m1_solver.run_solver(
+        results, _metrics = m1_solver.run_solver(
             scene_json_path="scene.json",
             animation_json_path="animation.json",
             output_dir="m1_test_output",
-            limit_frames=num_test_frames
+            limit_frames=num_test_frames,
         )
         
     if not os.path.exists(golden_path):

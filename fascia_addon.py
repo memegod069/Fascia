@@ -1765,9 +1765,11 @@ class FASCIA_OT_export_scene(bpy.types.Operator):
         # Find all landmarks to resolve target bones
         landmarks = {obj.name: obj for obj in bpy.data.objects if obj.get("fascia_type") == "landmark"}
 
-        # Temporarily reset fascia_flex to 0.0 to export clean undeformed rest-pose geometries
+        # Temporarily reset fascia_flex to 0.0 and frame to frame_start to export clean undeformed rest-pose geometries
         original_flex = scene.fascia_flex
+        original_frame = scene.frame_current
         scene.fascia_flex = 0.0
+        scene.frame_set(scene.frame_start)
         context.view_layer.update()
 
         # 1. Armature bone configurations
@@ -1829,11 +1831,12 @@ class FASCIA_OT_export_scene(bpy.types.Operator):
             }
             muscles_data.append(muscle_dict)
 
-        # Restore the original flex value for the animation timeline evaluation
+        # Restore the original flex value and frame for the animation timeline evaluation
         scene.fascia_flex = original_flex
+        scene.frame_set(original_frame)
+        context.view_layer.update()
 
         # 3. Walk timeline for animation data
-        original_frame = scene.frame_current
         frame_start = scene.frame_start
         frame_end = scene.frame_end
 

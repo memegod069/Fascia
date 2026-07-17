@@ -2,11 +2,26 @@ import os
 import sys
 import json
 import numpy as np
+import importlib
 
-# Add parent directory to path so we can import fascia_addon
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Prefer the project-local fascia_addon over any older copy already enabled
+# from Blender's user addons folder (AppData may not have export_scene).
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import bpy
+
+# Drop a pre-loaded (possibly outdated) fascia_addon module if present.
+if "fascia_addon" in sys.modules:
+    try:
+        sys.modules["fascia_addon"].unregister()
+    except Exception:
+        pass
+    del sys.modules["fascia_addon"]
+
 import fascia_addon
+importlib.reload(fascia_addon)
 
 def setup_test_scene():
     print("Setting up M2 test scene...")
@@ -57,6 +72,8 @@ def setup_test_scene():
                 
     # Go back to Object mode
     bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.scene.frame_set(1)
+    bpy.context.view_layer.update()
     
     # 2. Create a base skin object (just a tagged cube)
     bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0, 0, 1))
@@ -112,7 +129,26 @@ def setup_test_scene():
     scene.fascia_armature = arm_obj
     scene.frame_start = 1
     scene.frame_end = 60
-    scene.fascia_flex = 1.0 # Set flex to 1.0 so solver receives full activation
+
+    # Ramp fascia_flex 0 → 1 across the 60-frame timeline (M0-style activation
+    # ramp, scaled to 60 frames: a = (frame - 1) / 59). Export samples this
+    # per frame into activations.Biceps. Do NOT leave flex stuck at 1.0 —
+    # that made every frame full activation and hid the contraction ramp.
+    pref = bpy.context.preferences.edit
+    old_interp = pref.keyframe_new_interpolation_type
+    pref.keyframe_new_interpolation_type = 'LINEAR'
+    try:
+        scene.frame_set(1)
+        scene.fascia_flex = 0.0
+        scene.keyframe_insert(data_path="fascia_flex", frame=1)
+
+        scene.frame_set(60)
+        scene.fascia_flex = 1.0
+        scene.keyframe_insert(data_path="fascia_flex", frame=60)
+    finally:
+        pref.keyframe_new_interpolation_type = old_interp
+
+    scene.frame_set(1)
     
     # Setup per-muscle recruitment
     scene.fascia_recruitment.clear()
@@ -132,7 +168,11 @@ def setup_test_scene():
     return arm_obj, muscle_obj
 
 def run_test():
-    # Register the addon
+    # Register the project-local addon (may already be enabled as a user addon).
+    try:
+        fascia_addon.unregister()
+    except Exception:
+        pass
     fascia_addon.register()
     
     setup_test_scene()
@@ -159,7 +199,28 @@ def run_test():
     
     with open(animation_json, 'r') as f:
         anim_data = json.load(f)
-    print(f"animation.json has {len(anim_data['frames'])} frames.")
+    n_frames = len(anim_data['frames'])
+    print(f"animation.json has {n_frames} frames.")
+
+    # Confirm flex ramp made it into activations (not a flat 1.0 constant).
+    acts = []
+    for fr in anim_data["frames"]:
+        act = fr["activations"].get("Biceps")
+        if act is None:
+            # Fallback: muscle object name may differ; take first activation
+            act = next(iter(fr["activations"].values()))
+        acts.append(float(act))
+
+    print("Activation samples:")
+    for idx in (0, n_frames // 2, n_frames - 1):
+        print(f"  frame {anim_data['frames'][idx]['frame']:02d}: Biceps a={acts[idx]:.4f}")
+
+    assert abs(acts[0] - 0.0) < 1e-4, f"Expected activation ~0 at start, got {acts[0]}"
+    assert abs(acts[-1] - 1.0) < 1e-4, f"Expected activation ~1 at end, got {acts[-1]}"
+    mid = acts[n_frames // 2]
+    assert 0.35 < mid < 0.65, f"Expected mid activation ~0.5, got {mid}"
+    assert len(set(round(a, 4) for a in acts)) > 2, "Activation must ramp (not constant)"
+    print(f"Activation ramp OK: {acts[0]:.3f} → {mid:.3f} → {acts[-1]:.3f}")
     
     with open(muscle_tet_json, 'r') as f:
         mesh_data = json.load(f)

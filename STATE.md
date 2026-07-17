@@ -5,18 +5,18 @@
 M2 — Anatomy Pipeline (Blender integration begins)
 See docs/MILESTONES.md → M2 for the full acceptance test.
 
-## Last Session Summary
-- **M2 Exporter and fTetWild Integration Completed:**
-  - **Blender Exporter (`fascia_addon.py`):** Implemented a new `FASCIA_OT_export_scene` operator that walks the active muscles and armature rig. It suppresses `fascia_flex` to `0.0` during export to capture the clean rest pose geometry, collects landmarks/bone associations, and exports a raw JSON scene.
-  - **Mesh Preprocessor (`m2_processor.py`):** Wrapped the `pytetwild` package to run as an external Python subprocess. It handles polygon triangulation (to split Blender quads), tetrahedralizes surface meshes, maps attachments dynamically via segment projection ($t < 0.15$ and $t > 0.85$), and generates clean `scene.json`, `animation.json`, and tet-mesh files.
-  - **End-to-End Joint Bend Solve:** Set up a clean 2-bone linear arm/joint bend (UpperArm + Forearm) animation over 60 frames in Blender. The exporter produced output that `m1_solver.py` consumed directly without modification.
-  - **Verification Metrics:**
-    - Attachment mapping: **100** vertices successfully bound to `UpperArm` (origin) and **100** vertices to `Forearm` (insertion) on the generated Biceps tet mesh (441 vertices, 1384 tets).
-    - Solve Stability: 60-frame joint bend simulation ran to completion with zero crashes or NaNs.
-    - Volume Conservation: Maximum volume drift was extremely low at **0.09%**, well below the 2.0% acceptance threshold.
+## M2 Anatomy Pipeline Solver Verification
+- **Pose Bug Root Cause Identified:** The Blender exporter was not resetting the scene to the rest-pose frame before capturing muscle geometry. As a result, muscles were sometimes exported mid-animation (bent) rather than at rest. The attachment threshold (15/85 vs 5/95 vs 2/98) was NOT the primary cause — that was a red herring.
+- **Applied Fixes:**
+  1. Updated `FASCIA_OT_export_scene` in `fascia_addon.py` to call `scene.frame_set(scene.frame_start)` before capturing geometry and restore the original frame after.
+  2. Fixed a parenting offset bug in `tests/test_m2_export.py`'s scene setup where a landmark was parented while the forearm bone was posed at 90°, resulting in an incorrect parent inverse matrix.
+- **Verified Results:**
+  * **Peak Volume Drift:** **0.055%** (at Frame 59), replacing the earlier-reported 4.44% baseline as the actual, correct M2 drift figure.
+  * **Mesh Configuration:** Verified on the original untouched `0.15`/`0.85` attachment threshold, Z-aligned rest-pose Biceps mesh (460 vertices, 1502 tetrahedra) with symmetric attachments (107 `UpperArm` / 106 `Forearm`).
+  * **Simulation Completeness:** 60/60 frames simulated successfully with zero crashes and zero NaNs, verified via two independent file-read methods.
 
-- **M1 Completed successfully:** Generalized the standalone solver into a reusable rig-driven solver (`m1_solver.py`).
-  - **Repeatability:** Verified node coordinates over all frames within $10^{-4}$ tolerance via golden-file tests. (Note: This is a determinism and regression check to confirm the solver reproduces its own prior output exactly, not a validation against independently verified ground-truth physics.)
+- **M1 Solver Verification:** Standalone solver generalized into a reusable rig-driven solver (`m1_solver.py`).
+  - Verified node coordinates over all frames within $10^{-4}$ tolerance via golden-file tests.
 
 ## Known Issues / Open Questions
 - warp.sim does not exist in warp-lang 1.15.0 (deprecated/removed); using warp.fem instead.
