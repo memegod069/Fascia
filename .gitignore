@@ -68,3 +68,9 @@ issues.md
 testing_issues_log.md
 IMPROVEMENT_PLAN.md
 .agents/
+
+# Simulation outputs
+m0_output/
+m1_output/
+m1_test_output/
+meshes/

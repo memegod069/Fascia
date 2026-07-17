@@ -114,3 +114,19 @@ Evidence: Spec 12 verification (the first flex=1 call with skin_sliding=True err
 **Save matrix_world before clearing parent:** Setting `obj.parent = None` without saving `obj.matrix_world.copy()` first causes Blender to snap the object to wrong world position when the parent was a posed bone. Fix: save → clear → restore matrix_world.
 
 **Bilateral landmark bone name mirroring:** Copying the same explicit bone name to both _L and _R landmarks causes both to bind to the left-side bone. Swap `.L→.R`, `_L→_R`, `left→right` for the _R side.
+
+---
+
+## 2026-07-15: Blender exporter frame-reset bug and parenting offset root cause
+
+**Problem:** M2 solver validation initially showed a high (4.44%) volume drift. The initial hypothesis was that the attachment projection thresholds (15/85) were too loose, causing excessive pinning. This was a **red herring**.
+
+**Root Cause:** The actual root cause was two-fold:
+1. **Exporter pose bug:** The Blender exporter (`FASCIA_OT_export_scene`) did not reset the scene frame to the rest-pose frame (`scene.frame_start`) before exporting the muscle mesh and landmark coordinates. It only set `scene.fascia_flex = 0.0`. If exported while the timeline sat on a posed frame, geometry was exported deformed/bent.
+2. **Landmark parenting bug:** In `tests/test_m2_export.py`, the landmarks were parented to bones while the forearm was posed at 90°. This created a parent inverse matrix offset. When the pose was cleared to 0° (frame 1), the landmark rotated/bent by the inverse (-90°), meaning frame 1 physically represented the bent pose, and frame 60 represented the straight pose. Because the frame-reset forced the export to frame 1, it captured the bent-arm geometry.
+
+**Fix:**
+1. Modified `FASCIA_OT_export_scene` to save `scene.frame_current`, set it to `scene.frame_start` during geometry capture, and restore it afterward.
+2. Fixed `tests/test_m2_export.py` to reset the frame to 1 and update the viewport immediately after returning to Object mode and BEFORE parenting landmarks.
+
+**Verification:** A clean run on the original untouched `0.15`/`0.85` threshold with a Z-aligned rest-pose mesh (symmetric 107/106 attachments) resulted in a peak volume drift of **0.055%** at frame 59. This confirms the threshold was not the driver of the drift, and the pose-reset bug is fully resolved.

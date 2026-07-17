@@ -1731,6 +1731,190 @@ class FASCIA_OT_bake_flex_pose(bpy.types.Operator):
 
 
 # ─────────────────────────────────────────────────────────────────
+# TOOL 8 (Milestone 2): EXPORT FEM SCENE
+# ─────────────────────────────────────────────────────────────────
+# Walks the active muscles, armature bones, and timeline keyframes.
+# Exports a raw JSON scene which is then tetrahedralized via pytetwild.
+# Produces scene.json, animation.json, and tet meshes under meshes/.
+# ─────────────────────────────────────────────────────────────────
+
+class FASCIA_OT_export_scene(bpy.types.Operator):
+    bl_idname = "fascia.export_scene"
+    bl_label = "Export FEM Scene"
+    bl_description = "Export muscle geometries, rig pose transforms, and activations for the FEM solver"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        scene = context.scene
+        has_muscles = any(obj.get("fascia_type") == "muscle" for obj in bpy.data.objects)
+        return context.mode == 'OBJECT' and scene.fascia_armature is not None and has_muscles
+
+    def execute(self, context):
+        import subprocess
+        import sys
+        import os
+        import json
+
+        scene = context.scene
+        armature = scene.fascia_armature
+
+        # Get active muscles
+        muscles = [obj for obj in bpy.data.objects if obj.get("fascia_type") == "muscle"]
+
+        # Find all landmarks to resolve target bones
+        landmarks = {obj.name: obj for obj in bpy.data.objects if obj.get("fascia_type") == "landmark"}
+
+        # Temporarily reset fascia_flex to 0.0 and frame to frame_start to export clean undeformed rest-pose geometries
+        original_flex = scene.fascia_flex
+        original_frame = scene.frame_current
+        scene.fascia_flex = 0.0
+        scene.frame_set(scene.frame_start)
+        context.view_layer.update()
+
+        # 1. Armature bone configurations
+        bones_data = {}
+        for bone in armature.data.bones:
+            bind_mat = armature.matrix_world @ bone.matrix_local
+            bones_data[bone.name] = {
+                "bind_matrix": [list(row) for row in bind_mat]
+            }
+
+        # 2. Muscles data
+        muscles_data = []
+        for m in muscles:
+            orig_lm_name = m.get("fascia_origin")
+            dest_lm_name = m.get("fascia_insertion")
+
+            orig_lm = landmarks.get(orig_lm_name)
+            dest_lm = landmarks.get(dest_lm_name)
+
+            if not orig_lm or not dest_lm:
+                self.report({'ERROR'}, f"Muscle '{m.name}' has missing origin or insertion landmarks.")
+                return {'CANCELLED'}
+
+            orig_bone = orig_lm.parent_bone if orig_lm.parent_type == 'BONE' else orig_lm.get("fascia_bone")
+            dest_bone = dest_lm.parent_bone if dest_lm.parent_type == 'BONE' else dest_lm.get("fascia_bone")
+
+            if not orig_bone or not dest_bone:
+                self.report({'ERROR'}, f"Landmarks for muscle '{m.name}' are not parented to any bones. Please bind landmarks to rig first.")
+                return {'CANCELLED'}
+
+            # Local mesh geometry
+            mesh = m.data
+            verts = [list(v.co) for v in mesh.vertices]
+            faces = [list(p.vertices) for p in mesh.polygons]
+
+            radius = m.get("fascia_radius", 0.05)
+
+            muscle_dict = {
+                "name": m.name,
+                "vertices": verts,
+                "faces": faces,
+                "matrix_world": [list(row) for row in m.matrix_world],
+                "radius": radius,
+                "material": {
+                    "mu": 34.01,
+                    "lam": 1500.0,
+                    "sigma_max": 24.0
+                },
+                "origin_landmark": {
+                    "name": orig_lm.name,
+                    "world_position": list(orig_lm.matrix_world.translation),
+                    "bone": orig_bone
+                },
+                "insertion_landmark": {
+                    "name": dest_lm.name,
+                    "world_position": list(dest_lm.matrix_world.translation),
+                    "bone": dest_bone
+                }
+            }
+            muscles_data.append(muscle_dict)
+
+        # Restore the original flex value and frame for the animation timeline evaluation
+        scene.fascia_flex = original_flex
+        scene.frame_set(original_frame)
+        context.view_layer.update()
+
+        # 3. Walk timeline for animation data
+        frame_start = scene.frame_start
+        frame_end = scene.frame_end
+
+        frames_list = []
+
+        # Build recruitment mapping
+        recruitment_map = {entry.name: entry.recruitment for entry in scene.fascia_recruitment}
+
+        try:
+            for frame in range(frame_start, frame_end + 1):
+                scene.frame_set(frame)
+
+                # Evaluate bone pose matrices
+                bones_pose = {}
+                for pb in armature.pose.bones:
+                    pose_mat = armature.matrix_world @ pb.matrix
+                    bones_pose[pb.name] = [list(row) for row in pose_mat]
+
+                # Evaluate activations
+                activations = {}
+                for m in muscles:
+                    rec_multiplier = recruitment_map.get(m.name, 1.0)
+                    activations[m.name] = scene.fascia_flex * rec_multiplier
+
+                frames_list.append({
+                    "frame": frame - frame_start,
+                    "bones": bones_pose,
+                    "activations": activations
+                })
+        finally:
+            scene.frame_set(original_frame)
+
+        raw_export_data = {
+            "fps": scene.render.fps,
+            "bones": bones_data,
+            "muscles": muscles_data,
+            "frames": frames_list
+        }
+
+        project_dir = os.path.dirname(bpy.data.filepath) if bpy.data.is_saved else ""
+        if not project_dir:
+            project_dir = os.path.abspath(".")
+
+        raw_json_path = os.path.join(project_dir, "scene_raw.json")
+        with open(raw_json_path, 'w') as rf:
+            json.dump(raw_export_data, rf, indent=2)
+
+        self.report({'INFO'}, f"Saved scene_raw.json to {raw_json_path}")
+
+        # Now trigger the external Python preprocessor
+        python_exe = "C:\\Python313\\python.exe"
+        processor_script = os.path.join(project_dir, "m2_processor.py")
+
+        if not os.path.exists(processor_script):
+            processor_script = "C:\\Projects\\Fascia\\m2_processor.py"
+
+        cmd = [python_exe, processor_script, raw_json_path, project_dir]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            self.report({'INFO'}, f"FEM Exporter: {result.stdout.strip()}")
+            if os.path.exists(raw_json_path):
+                os.remove(raw_json_path)
+            return {'FINISHED'}
+        except subprocess.CalledProcessError as err:
+            self.report({'ERROR'}, f"FEM Exporter failed! fTetWild error:\n{err.stderr.strip()}")
+            return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"FEM Exporter process execution error: {str(e)}")
+            return {'CANCELLED'}
+
+
+# ─────────────────────────────────────────────────────────────────
 # TOOL 9 (Spec 9): STATUS QUERY (LLM-facing)
 # ─────────────────────────────────────────────────────────────────
 # Reports the current Fascia workflow state as a short plain-English
@@ -1908,6 +2092,9 @@ class FASCIA_PT_main_panel(bpy.types.Panel):
         # Button to bake the flex animation into Shape Keys
         layout.operator("fascia.bake_flex_pose", text="Bake Result", icon="SHAPEKEY_DATA")
 
+        # Button to export for the Warp FEM solver
+        layout.operator("fascia.export_scene", text="Export FEM Scene", icon="EXPORT")
+
 
 # ─────────────────────────────────────────────────────────────────
 # PER-MUSCLE CONTRACTION RECRUITMENT
@@ -1962,6 +2149,7 @@ classes = (
     FASCIA_OT_clear_rig_binding,
     FASCIA_OT_simulate_motion,
     FASCIA_OT_bake_flex_pose,
+    FASCIA_OT_export_scene,
     FASCIA_OT_get_status,
     FASCIA_PT_main_panel,
 )

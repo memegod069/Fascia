@@ -135,6 +135,9 @@ bpy.ops.fascia.bake_flex_pose()
 
 See `docs/llm-integration.md` for the full integration guide and `species/equine_horse.json` for the anatomy JSON schema.
 
+**Project Vision & Motivation**  
+The original motivation and non-compromise stance behind Fascia is documented in `docs/project-vision-and-motivation.md`. This captures the creator’s goal of reaching real Weta / Red Dead Redemption level quality without compromise.
+
 ## Testing
 
 - Pure Python smoke tests: `python tests/smoke_test.py`

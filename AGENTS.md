@@ -1,3 +1,6 @@
+Note: for the standalone FEM simulation engine (separate from the
+Blender addon), also read AGENTS_ENGINE.md.
+
 # Fascia — Creature Soft-Tissue Toolbox for Blender
 
 This file is the source of truth for AI coding agents working on Fascia.
@@ -36,19 +39,31 @@ Single-file add-on: `fascia_addon.py` (~1268 lines). The `register()` entry poin
 
 ## Hard Design Rules
 
+**NON-NEGOTIABLE QUALITY TARGET (Read Before Everything Else)**
+
+We are not building approximations. We are building m such that y = m · x reaches full Weta Tissue or Red Dead Redemption 2 level quality and performance.
+
+- Visual fidelity, believable dynamics, skin/muscle/fat behavior, and production performance are non-negotiable.
+- Geometric tricks, simplified volume math, or "good enough for now" solutions are temporary only.
+- Every agent must reject any proposal that compromises on matching the reference quality.
+
+If a design cannot deliver Weta/RDR results, redesign it. Do not simplify the target.
+
+**Read also:** `docs/project-vision-and-motivation.md` — this file contains the creator’s own words about why the project exists and the strong “no compromise on quality” stance expressed in this project’s development.
+
 1. No AI lives inside Fascia.
 2. External LLMs may drive Fascia later, but only by calling tools.
 3. Each tool should do one clear job.
 4. Tools should report short plain-English status messages.
 5. Never return raw mesh or vertex dumps to an LLM-facing tool.
-6. Do not overclaim placeholder code as real anatomy, real simulation, or production physics.
+6. Do not overclaim placeholder code as real anatomy, real simulation, or production physics — but always keep the long-term target in mind (full quality).
 7. Keep public files free of personal/private information.
 8. Fascia receives meshes, it does not generate them. Tool 1 should accept a base mesh, not create one from scratch. The placeholder generator is for testing only.
-9. **Build the tool, not the horse.** The horse is a test case, not the deliverable. Do not tune values to one specific mesh.
-10. **Fascia is the flesh + the wires.** Do not rebuild what Blender already has (mesh sculpting, bone rigging, weight painting). The LLM drives those through Blender's native operators. Fascia fills the soft-tissue gap and wires it to the mesh and rig — that is the whole product.
+9. **Build the tool, not the horse.** The horse is a test case, not the deliverable. But the tool must be capable of producing horse-level (Weta/RDR) results.
+10. **Fascia is the flesh + the wires.** Do not rebuild what Blender already has (mesh sculpting, bone rigging, weight painting). The LLM drives those through Blender's native operators. Fascia fills the soft-tissue gap and wires it to the mesh and rig — at full quality.
 11. **The LLM is the muscle TD.** Fascia's tools must accept anatomy (landmarks, muscles, attachments) as input — not read hardcoded horse tables forever. The horse is the first data file, not the only one. If a tool cannot accept an alien's anatomy, it is not done.
 12. **Landmarks must bind to the rig.** A landmark that floats when the skeleton moves is a bug to fix, not a limitation to document forever. Bone moves → landmark moves → muscle follows → skin deforms. The rig binding is Fascia's job.
-13. **Never claim FEM physics parity.** Contraction is geometric and volume-preserving, not a physics simulation. Be honest about this in code, docs, and status messages.
+13. **Never settle for geometric-only solutions.** Current contraction uses volume-preserving math as a stepping stone. The direction must advance toward methods that can deliver real high-fidelity physics behavior matching Weta and RDR references.
 
 ## Commands & Testing
 
